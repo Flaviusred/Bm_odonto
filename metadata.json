@@ -1,5 +1,5 @@
 {
-  "name": "clinica_odonto",
-  "description": "",
+  "name": "Clínica Odonto",
+  "description": "Sistema de gerenciamento para clínicas odontológicas com controle de pacientes, agendamentos e tratamentos.",
   "requestFramePermissions": []
 }
