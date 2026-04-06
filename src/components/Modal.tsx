@@ -30,8 +30,13 @@ export function Modal({ isOpen, onClose, title, children, className, closeOnBack
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={closeOnBackdropClick ? onClose : undefined}
+            // Only close when clicking directly on the backdrop element itself
+            onMouseDown={(e: React.MouseEvent<HTMLDivElement>) => {
+              if (!closeOnBackdropClick) return;
+              if (e.target === e.currentTarget) onClose();
+            }}
             className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm"
+            role="presentation"
           />
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
             <motion.div

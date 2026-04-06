@@ -18,6 +18,13 @@ export const parseDate = (dateString: string): Date => {
   return new Date(year, month - 1, day);
 };
 
+export const parseDateTime = (dateString: string, timeString: string): Date => {
+  if (!dateString) return new Date();
+  const [year, month, day] = dateString.split('-').map(Number);
+  const [hour = 0, minute = 0] = (timeString || '00:00').split(':').map(Number);
+  return new Date(year, month - 1, day, hour, minute);
+};
+
 export const formatDateLocal = (date: Date): string => {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');

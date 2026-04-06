@@ -8,7 +8,7 @@ import { Modal } from './Modal';
 import { Patient, Appointment, Treatment, Dentist, PatientType } from '../types';
 import { patientService } from '../services/patientService';
 import { cn, validateCPF, maskCPF, maskPhone, maskCEP } from '../lib/utils';
-import { formatDateDDMMYYYY, formatDateLocal, parseDate } from '../lib/dateUtils';
+import { formatDateDDMMYYYY, formatDateLocal, parseDate, parseDateTime } from '../lib/dateUtils';
 
 interface PatientListProps {
   patients: Patient[];
@@ -206,7 +206,16 @@ function PatientListContent({
       setSuccessMessage('Paciente atualizado com sucesso!');
       setIsSuccessModalOpen(true);
     } else {
-      onAddPatient(formData);
+      // Herdar email e telefone do titular se o dependente não tiver os campos preenchidos
+      let finalData = { ...formData };
+      if (finalData.dependentOf) {
+        const titular = patients.find(p => p.id === finalData.dependentOf);
+        if (titular) {
+          if (!finalData.email && titular.email) finalData.email = titular.email;
+          if (!finalData.phone && titular.phone) finalData.phone = titular.phone;
+        }
+      }
+      onAddPatient(finalData);
       setSuccessMessage('Paciente cadastrado com sucesso!');
       setIsSuccessModalOpen(true);
     }
@@ -633,8 +642,32 @@ function PatientListContent({
                     <span>•</span>
                     <span>{dep.cpf}</span>
                   </div>
+                  {dep.email && (
+                    <div className="flex items-center gap-1 mt-1 text-xs text-zinc-400">
+                      <Mail className="h-3 w-3" />
+                      <span className="truncate max-w-[180px]">{dep.email}</span>
+                      {dep.email === patients.find(p => p.id === dep.dependentOf)?.email && (
+                        <span className="text-[10px] text-emerald-600 font-bold ml-1">(herdado)</span>
+                      )}
+                    </div>
+                  )}
+                  {dep.phone && (
+                    <div className="flex items-center gap-1 mt-0.5 text-xs text-zinc-400">
+                      <Phone className="h-3 w-3" />
+                      <span>{dep.phone}</span>
+                      {dep.phone === patients.find(p => p.id === dep.dependentOf)?.phone && (
+                        <span className="text-[10px] text-emerald-600 font-bold ml-1">(herdado)</span>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap">
+                  <Button variant="outline" size="sm" className="flex-1 h-9 text-xs gap-2 text-zinc-600 border-zinc-200" onClick={() => {
+                    setViewingDependentsOf(null);
+                    handleEdit(dep);
+                  }}>
+                    <Edit2 className="h-3 w-3" /> Editar
+                  </Button>
                   <Button variant="outline" size="sm" className="flex-1 h-9 text-xs gap-2 text-emerald-600 border-emerald-50" onClick={() => {
                     setViewingDependentsOf(null);
                     setSelectedPatientId(dep.id);
@@ -662,7 +695,7 @@ function PatientListContent({
   if (selectedPatientDetails) {
     const patientAppointments = appointments
       .filter(a => a.patientId === selectedPatientDetails.id)
-      .sort((a, b) => new Date(b.date + 'T' + b.time).getTime() - new Date(a.date + 'T' + a.time).getTime());
+      .sort((a, b) => parseDateTime(b.date, b.time).getTime() - parseDateTime(a.date, a.time).getTime());
     
     const patientTreatments = treatments
       .filter(t => t.patientId === selectedPatientDetails.id)
@@ -671,10 +704,10 @@ function PatientListContent({
          (t.type && t.type.toLowerCase().includes(historySearch.toLowerCase()))) &&
         (dentistFilter === 'all' || t.dentistId === dentistFilter)
       )
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      .sort((a, b) => parseDate(b.date).getTime() - parseDate(a.date).getTime());
 
     const groupedTreatments = patientTreatments.reduce((acc, t) => {
-      const date = new Date(t.date).toLocaleDateString('pt-BR');
+      const date = parseDate(t.date).toLocaleDateString('pt-BR');
       const key = `${date}-${t.dentistId}`;
       if (!acc[key]) {
         acc[key] = { date, dentistId: t.dentistId, treatments: [] };

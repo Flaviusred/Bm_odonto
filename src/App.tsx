@@ -7,6 +7,7 @@ import { AgendaView } from './components/AgendaView';
 import { DentistList } from './components/DentistList';
 import { AttendantList } from './components/AttendantList';
 import { TreatmentList } from './components/TreatmentList';
+// AppointmentList was moved to _cleanup/ (replaced by AgendaView)
 import { PatientPortal } from './components/PatientPortal';
 import { DentistPortal } from './components/DentistPortal';
 import { ProfileEditModal } from './components/ProfileEditModal';
@@ -23,8 +24,10 @@ import { formatDate, parseDate } from './lib/dateUtils';
 import { Input } from './components/Input';
 import { Button } from './components/Button';
 import { Modal } from './components/Modal';
-import { Stethoscope, Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
+import { Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
 import { emailService } from './services/emailService';
+import LoadingOverlay from './components/LoadingOverlay';
+import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
 import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, getDocs, query, where, Timestamp } from 'firebase/firestore';
 import { db, auth } from './firebase';
 
@@ -80,41 +83,24 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 }
 
 export default function App() {
+  const [globalLoading, setGlobalLoading] = useState(false);
+
+  useEffect(() => {
+    const unsub = subscribeLoading((v) => setGlobalLoading(v));
+    return unsub;
+  }, []);
   const [user, setUser] = useState<User | null>(() => {
-    const saved = localStorage.getItem('odonto_user');
+    const saved = sessionStorage.getItem('odonto_user');
     return saved ? JSON.parse(saved) : null;
   });
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
-  useEffect(() => {
-    // Check if admin exists in Firestore, if not, create it
-    const checkAdmin = async () => {
-      try {
-        const adminId = '1';
-        const adminDoc = await getDoc(doc(db, 'users', adminId));
-        if (!adminDoc.exists()) {
-          const admin: User = { 
-            id: adminId, 
-            name: 'Admin Odonto', 
-            email: 'flaviano.fcp@gmail.com', 
-            password: '123', 
-            role: 'admin' as UserRole, 
-            permissions: ['dashboard', 'patients', 'appointments', 'dentist-schedules', 'treatments', 'dentists', 'inventory', 'announcements', 'audit', 'settings', 'users'], 
-            cpf: '111.111.111-11' 
-          };
-          await setDoc(doc(db, 'users', adminId), admin);
-        }
-      } catch (error) {
-        console.error("Error checking/creating admin:", error);
-      }
-    };
-    checkAdmin();
-  }, []);
 
   const [users, setUsers] = useState<User[]>([]);
 
   const [activeTab, setActiveTab] = useState(() => {
-    const saved = localStorage.getItem('odonto_user');
+    const saved = sessionStorage.getItem('odonto_user');
     if (saved) {
       const u = JSON.parse(saved);
       if (u.role === 'patient') return 'patient-profile';
@@ -198,8 +184,8 @@ export default function App() {
 
   // Persistence
   useEffect(() => {
-    if (user) localStorage.setItem('odonto_user', JSON.stringify(user));
-    else localStorage.removeItem('odonto_user');
+    if (user) sessionStorage.setItem('odonto_user', JSON.stringify(user));
+    else sessionStorage.removeItem('odonto_user');
   }, [user]);
 
   const addUser = async (data: Omit<User, 'id'>) => {
@@ -210,34 +196,36 @@ export default function App() {
     };
     
     try {
-      await setDoc(doc(db, 'users', id), newUser);
-      
-      if (newUser.role === 'attendant') {
-        const newAttendant: Attendant = {
-          id: newUser.id,
-          name: newUser.name,
-          email: newUser.email,
-          phone: newUser.phone || '',
-          createdAt: new Date().toISOString(),
-          isActive: true,
-          password: newUser.password,
-        };
-        await setDoc(doc(db, 'attendants', id), newAttendant);
-      } else if (newUser.role === 'dentist') {
-        const newDentist: Dentist = {
-          id: newUser.id,
-          name: newUser.name,
-          email: newUser.email,
-          phone: newUser.phone || '',
-          specialty: (data as any).specialty || 'Geral',
-          cro: (data as any).cro || '00000',
-          createdAt: new Date().toISOString(),
-          isActive: true,
-          password: newUser.password,
-        };
-        await setDoc(doc(db, 'dentists', id), newDentist);
-      }
-      
+      await runWithLoading(async () => {
+        await setDoc(doc(db, 'users', id), newUser);
+
+        if (newUser.role === 'attendant') {
+          const newAttendant: Attendant = {
+            id: newUser.id,
+            name: newUser.name,
+            email: newUser.email,
+            phone: newUser.phone || '',
+            createdAt: new Date().toISOString(),
+            isActive: true,
+            password: newUser.password,
+          };
+          await setDoc(doc(db, 'attendants', id), newAttendant);
+        } else if (newUser.role === 'dentist') {
+          const newDentist: Dentist = {
+            id: newUser.id,
+            name: newUser.name,
+            email: newUser.email,
+            phone: newUser.phone || '',
+            specialty: (data as any).specialty || 'Geral',
+            cro: (data as any).cro || '00000',
+            createdAt: new Date().toISOString(),
+            isActive: true,
+            password: newUser.password,
+          };
+          await setDoc(doc(db, 'dentists', id), newDentist);
+        }
+      });
+
       logAction('Criação', 'system', newUser.id, `Usuário ${newUser.name} criado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'users');
@@ -246,9 +234,11 @@ export default function App() {
 
   const deleteUser = async (id: string) => {
     try {
-      await deleteDoc(doc(db, 'users', id));
-      await deleteDoc(doc(db, 'attendants', id));
-      await deleteDoc(doc(db, 'dentists', id));
+      await runWithLoading(async () => {
+        await deleteDoc(doc(db, 'users', id));
+        await deleteDoc(doc(db, 'attendants', id));
+        await deleteDoc(doc(db, 'dentists', id));
+      });
       logAction('Exclusão', 'system', id, `Usuário excluído.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `users/${id}`);
@@ -265,31 +255,33 @@ export default function App() {
     
     // Atualização no Firebase Firestore
     try {
-      const userRef = doc(db, 'users', updated.id);
-      await setDoc(userRef, updated, { merge: true });
-      console.log('Usuário atualizado no Firestore com sucesso');
-      
-      // If user is a dentist, update the dentist record too
-      if (updated.role === 'dentist') {
-        const dentistRef = doc(db, 'dentists', updated.id);
-        await setDoc(dentistRef, {
-          name: updated.name,
-          email: updated.email,
-          phone: updated.phone || '',
-          password: updated.password,
-          cro: (updated as any).cro,
-          specialty: (updated as any).specialty
-        }, { merge: true });
-      } else if (updated.role === 'attendant') {
-        const attendantRef = doc(db, 'attendants', updated.id);
-        await setDoc(attendantRef, {
-          name: updated.name,
-          email: updated.email,
-          phone: updated.phone || '',
-          password: updated.password
-        }, { merge: true });
-      }
-      
+      await runWithLoading(async () => {
+        const userRef = doc(db, 'users', updated.id);
+        await setDoc(userRef, updated, { merge: true });
+        console.log('Usuário atualizado no Firestore com sucesso');
+
+        // If user is a dentist, update the dentist record too
+        if (updated.role === 'dentist') {
+          const dentistRef = doc(db, 'dentists', updated.id);
+          await setDoc(dentistRef, {
+            name: updated.name,
+            email: updated.email,
+            phone: updated.phone || '',
+            password: updated.password,
+            cro: (updated as any).cro,
+            specialty: (updated as any).specialty
+          }, { merge: true });
+        } else if (updated.role === 'attendant') {
+          const attendantRef = doc(db, 'attendants', updated.id);
+          await setDoc(attendantRef, {
+            name: updated.name,
+            email: updated.email,
+            phone: updated.phone || '',
+            password: updated.password
+          }, { merge: true });
+        }
+      });
+
       logAction('Edição', 'system', updated.id, `Usuário ${updated.name} atualizado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `users/${updated.id}`);
@@ -337,7 +329,8 @@ export default function App() {
     
     if (user) {
       setUser(user);
-      localStorage.setItem('odonto_user', JSON.stringify(user));
+      setSessionExpired(false);
+      sessionStorage.setItem('odonto_user', JSON.stringify(user));
       setActiveTab(user.role === 'patient' ? 'patient-profile' : user.role === 'dentist' ? 'dentist-appointments' : 'dashboard');
       logAction('Login', 'system', user.id, `Usuário ${user.name} entrou no sistema.`);
     } else {
@@ -345,12 +338,31 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
-    if (user) logAction('Logout', 'system', user.id, `${user.name} saiu do sistema.`);
+  const handleLogout = (expired = false) => {
+    if (user) logAction('Logout', 'system', user.id, expired ? `${user.name} sessão encerrada por inatividade.` : `${user.name} saiu do sistema.`);
     setUser(null);
-    localStorage.removeItem('odonto_user');
+    sessionStorage.removeItem('odonto_user');
     setActiveTab('dashboard');
+    if (expired) setSessionExpired(true);
   };
+
+  // Encerra sessão após 15 minutos de inatividade
+  const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
+  useEffect(() => {
+    if (!user) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const resetTimer = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => handleLogout(true), INACTIVITY_TIMEOUT);
+    };
+    const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'] as const;
+    events.forEach(ev => window.addEventListener(ev, resetTimer));
+    resetTimer();
+    return () => {
+      clearTimeout(timer);
+      events.forEach(ev => window.removeEventListener(ev, resetTimer));
+    };
+  }, [user]);
 
   // Patient Handlers
   const addPatient = async (data: Omit<Patient, 'id' | 'createdAt' | 'isActive'> & { id?: string }) => {
@@ -373,20 +385,22 @@ export default function App() {
     };
 
     try {
-      await setDoc(doc(db, 'patients', id), newPatient);
-      
-      // Criar usuário correspondente para o portal do paciente
-      const newUser: User = {
-        id,
-        name: newPatient.name,
-        email: newPatient.email,
-        password: (data as any).password || Math.random().toString(36).substr(2, 8),
-        role: 'patient',
-        permissions: ['patient-profile'],
-        phone: newPatient.phone
-      };
-      await setDoc(doc(db, 'users', id), newUser);
-      
+      await runWithLoading(async () => {
+        await setDoc(doc(db, 'patients', id), newPatient);
+
+        // Criar usuário correspondente para o portal do paciente
+        const newUser: User = {
+          id,
+          name: newPatient.name,
+          email: newPatient.email,
+          password: (data as any).password || Math.random().toString(36).substr(2, 8),
+          role: 'patient',
+          permissions: ['patient-profile'],
+          phone: newPatient.phone
+        };
+        await setDoc(doc(db, 'users', id), newUser);
+      });
+
       logAction('Criação', 'patient', newPatient.id, `Paciente ${newPatient.name} criado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'patients');
@@ -395,21 +409,23 @@ export default function App() {
 
   const deletePatient = async (id: string) => {
     try {
-      const patient = patients.find(p => p.id === id);
-      await deleteDoc(doc(db, 'patients', id));
-      await deleteDoc(doc(db, 'users', id));
-      logAction('Exclusão', 'patient', id, `Paciente ${patient?.name || id} excluído.`);
-      
-      // Delete related appointments and treatments
-      const relatedAppointments = appointments.filter(a => a.patientId === id);
-      for (const apt of relatedAppointments) {
-        await deleteDoc(doc(db, 'appointments', apt.id));
-      }
-      
-      const relatedTreatments = treatments.filter(t => t.patientId === id);
-      for (const t of relatedTreatments) {
-        await deleteDoc(doc(db, 'treatments', t.id));
-      }
+      await runWithLoading(async () => {
+        const patient = patients.find(p => p.id === id);
+        await deleteDoc(doc(db, 'patients', id));
+        await deleteDoc(doc(db, 'users', id));
+
+        // Delete related appointments and treatments
+        const relatedAppointments = appointments.filter(a => a.patientId === id);
+        for (const apt of relatedAppointments) {
+          await deleteDoc(doc(db, 'appointments', apt.id));
+        }
+
+        const relatedTreatments = treatments.filter(t => t.patientId === id);
+        for (const t of relatedTreatments) {
+          await deleteDoc(doc(db, 'treatments', t.id));
+        }
+        logAction('Exclusão', 'patient', id, `Paciente ${patient?.name || id} excluído.`);
+      });
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `patients/${id}`);
     }
@@ -417,14 +433,16 @@ export default function App() {
 
   const updatePatient = async (updated: Patient) => {
     try {
-      await setDoc(doc(db, 'patients', updated.id), updated, { merge: true });
-      
-      // Se o paciente tiver uma senha, atualiza o usuário correspondente
-      if ((updated as any).password) {
-        await setDoc(doc(db, 'users', updated.id), {
-          password: (updated as any).password
-        }, { merge: true });
-      }
+      await runWithLoading(async () => {
+        await setDoc(doc(db, 'patients', updated.id), updated, { merge: true });
+
+        // Se o paciente tiver uma senha, atualiza o usuário correspondente
+        if ((updated as any).password) {
+          await setDoc(doc(db, 'users', updated.id), {
+            password: (updated as any).password
+          }, { merge: true });
+        }
+      });
 
       logAction('Edição', 'patient', updated.id, `Paciente ${updated.name} atualizado.`);
     } catch (error) {
@@ -600,16 +618,46 @@ export default function App() {
     
     try {
       await setDoc(doc(db, 'appointments', id), newApt);
-      logAction(data.status === 'blocked' ? 'Bloqueio de Horário' : 'Criação', 'appointment', newApt.id, `Agendamento para ${new Date(data.date).toLocaleDateString('pt-BR')} às ${data.time}.`);
+      logAction(data.status === 'blocked' ? 'Bloqueio de Horário' : 'Criação', 'appointment', newApt.id, `Agendamento para ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}.`);
 
       // Email notification
       const patient = patients.find(p => p.id === data.patientId);
+      const dentist = dentists.find(d => d.id === data.dentistId);
+      const dentistName = dentist?.name || '';
       if (patient && data.status !== 'blocked') {
-        emailService.sendAppointmentEmail(
-          patient.email,
-          'Confirmação de Agendamento',
-          `Olá ${patient.name}, seu agendamento foi confirmado para ${new Date(data.date).toLocaleDateString('pt-BR')} às ${data.time}.`
-        );
+        // Fallback: se dependente não tiver e-mail, usa o e-mail do titular
+        let notifyEmail = patient.email && String(patient.email).trim() !== '' ? patient.email : '';
+        if (!notifyEmail && patient.dependentOf) {
+          const titular = patients.find(p => p.id === patient.dependentOf);
+          if (titular?.email && String(titular.email).trim() !== '') notifyEmail = titular.email;
+        }
+
+        if (notifyEmail) {
+          emailService.sendAppointmentEmail(
+            notifyEmail,
+            'Confirmação de Agendamento',
+            `Olá ${patient.name}, seu agendamento foi confirmado para ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}.\nDentista: ${dentistName}`
+          );
+        } else {
+          const newNotification = {
+            id: Math.random().toString(36).substr(2, 9),
+            message: `Paciente ${patient.name} não possui e-mail cadastrado — confirmação não enviada.`,
+            type: 'info' as const
+          };
+          setNotifications(prev => [...prev, newNotification]);
+          setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== newNotification.id)), 5000);
+        }
+
+        // Mostrar confirmação na tela do paciente quando o agendamento for criado por ele
+        if (user?.role === 'patient' && user.id === data.patientId) {
+          const patientNotif = {
+            id: Math.random().toString(36).substr(2, 9),
+            message: `Agendamento confirmado para ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}.`,
+            type: 'success' as const
+          };
+          setNotifications(prev => [...prev, patientNotif]);
+          setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== patientNotif.id)), 5000);
+        }
       }
 
       // Notification logic
@@ -617,11 +665,22 @@ export default function App() {
         const patientName = patients.find(p => p.id === data.patientId)?.name || 'Paciente';
         const newNotification = {
           id: Math.random().toString(36).substr(2, 9),
-          message: `Novo agendamento: ${patientName} em ${new Date(data.date).toLocaleDateString('pt-BR')} às ${data.time}`,
+          message: `Novo agendamento: ${patientName} em ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}`,
           type: 'success' as const
         };
         setNotifications(prev => [...prev, newNotification]);
         setUnseenCount(prev => prev + 1);
+      }
+
+      // Request server to sync this appointment to connected Google Calendars
+      try {
+        await fetch('/api/sync-appointment', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ appointment: newApt })
+        });
+      } catch (syncErr) {
+        console.warn('Failed to request calendar sync', syncErr);
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'appointments');
@@ -632,6 +691,16 @@ export default function App() {
     try {
       await updateDoc(doc(db, 'appointments', id), { status });
       logAction('Atualização de Status', 'appointment', id, `Status do agendamento alterado para ${status}.`);
+      // Trigger calendar sync for this appointment (use local cache to get details)
+      try {
+        const apt = appointments.find(a => a.id === id);
+        if (apt) {
+          const syncApt = { ...apt, status };
+          await fetch('/api/sync-appointment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appointment: syncApt }) });
+        }
+      } catch (syncErr) {
+        console.warn('Failed to request calendar sync on status update', syncErr);
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `appointments/${id}`);
     }
@@ -640,16 +709,32 @@ export default function App() {
   const updateAppointment = async (updatedAppointment: Appointment) => {
     try {
       await setDoc(doc(db, 'appointments', updatedAppointment.id), updatedAppointment, { merge: true });
-      logAction('Edição', 'appointment', updatedAppointment.id, `Agendamento para ${new Date(updatedAppointment.date).toLocaleDateString('pt-BR')} às ${updatedAppointment.time} atualizado.`);
+      logAction('Edição', 'appointment', updatedAppointment.id, `Agendamento para ${parseDate(updatedAppointment.date).toLocaleDateString('pt-BR')} às ${updatedAppointment.time} atualizado.`);
       
       // Email notification
       const patient = patients.find(p => p.id === updatedAppointment.patientId);
+      const dentist = dentists.find(d => d.id === updatedAppointment.dentistId);
+      const dentistName = dentist?.name || '';
       if (patient) {
-        emailService.sendAppointmentEmail(
-          patient.email,
-          'Atualização de Agendamento',
-          `Olá ${patient.name}, seu agendamento foi atualizado para ${new Date(updatedAppointment.date).toLocaleDateString('pt-BR')} às ${updatedAppointment.time}.`
-        );
+        // Fallback: dependente herda e-mail do titular quando necessário
+        let notifyEmail = patient.email && String(patient.email).trim() !== '' ? patient.email : '';
+        if (!notifyEmail && patient.dependentOf) {
+          const titular = patients.find(p => p.id === patient.dependentOf);
+          if (titular?.email && String(titular.email).trim() !== '') notifyEmail = titular.email;
+        }
+        if (notifyEmail) {
+          emailService.sendAppointmentEmail(
+            notifyEmail,
+            'Atualização de Agendamento',
+            `Olá ${patient.name}, seu agendamento foi atualizado para ${parseDate(updatedAppointment.date).toLocaleDateString('pt-BR')} às ${updatedAppointment.time}.\nDentista: ${dentistName}`
+          );
+        }
+      }
+      // Request server to sync updated appointment
+      try {
+        await fetch('/api/sync-appointment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appointment: updatedAppointment }) });
+      } catch (syncErr) {
+        console.warn('Failed to request calendar sync on update', syncErr);
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `appointments/${updatedAppointment.id}`);
@@ -716,6 +801,19 @@ export default function App() {
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [forgotPasswordEmail, setForgotPasswordEmail] = useState('');
   const [forgotPasswordCpf, setForgotPasswordCpf] = useState('');
+
+  const formatCPF = (value: string) => {
+    const digits = (value || '').replace(/\D/g, '').slice(0, 11);
+    if (!digits) return '';
+    if (digits.length <= 3) return digits;
+    if (digits.length <= 6) return `${digits.slice(0,3)}.${digits.slice(3)}`;
+    if (digits.length <= 9) return `${digits.slice(0,3)}.${digits.slice(3,6)}.${digits.slice(6)}`;
+    return `${digits.slice(0,3)}.${digits.slice(3,6)}.${digits.slice(6,9)}-${digits.slice(9,11)}`;
+  };
+
+  const handleForgotPasswordCpfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setForgotPasswordCpf(formatCPF(e.target.value));
+  };
 
   useEffect(() => {
     const handleOpenProfile = () => setIsProfileEditOpen(true);
@@ -785,15 +883,40 @@ export default function App() {
   };
 
   const handleForgotPassword = async () => {
-    const userToUpdate = users.find(u => u.email.toLowerCase() === forgotPasswordEmail.toLowerCase() && u.cpf === forgotPasswordCpf);
+    const email = (forgotPasswordEmail || '').trim().toLowerCase();
+    const cpfNormalized = (forgotPasswordCpf || '').replace(/\D/g, '');
+
+    // Primeiro tenta encontrar no collection `users` (caso o cpf tenha sido salvo lá)
+    let userToUpdate: any = users.find(u => u.email && u.email.toLowerCase() === email && u.cpf && u.cpf.replace(/\D/g, '') === cpfNormalized);
+
+    // Se não encontrou, tenta pela collection `patients` (pacientes normalmente têm o CPF)
+    let patientMatch: any = null;
+    if (!userToUpdate) {
+      patientMatch = patients.find(p => p.email && p.email.toLowerCase() === email && p.cpf && p.cpf.replace(/\D/g, '') === cpfNormalized);
+      if (patientMatch) {
+        // Tenta achar o usuário correspondente por id; se não existir criaremos/atualizaremos o doc `users` em seguida
+        userToUpdate = users.find(u => u.id === patientMatch.id) || { id: patientMatch.id, email: patientMatch.email, name: patientMatch.name };
+      }
+    }
+
     if (userToUpdate) {
-      const newPassword = Math.random().toString(36).substr(2, 8);
-      
+      // Gera um token temporário para redefinição e salva no documento do usuário
+      const token = (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
+      const expires = Date.now() + 60 * 60 * 1000; // 1 hora
+
       try {
-        await updateDoc(doc(db, 'users', userToUpdate.id), { password: newPassword });
-        
-        emailService.sendPasswordResetEmail(userToUpdate.email, newPassword);
-        alert('Uma nova senha foi enviada para o seu e-mail.');
+        await setDoc(doc(db, 'users', userToUpdate.id), { passwordResetToken: token, passwordResetExpires: expires, email: userToUpdate.email, name: userToUpdate.name }, { merge: true });
+
+        // Também marca em outros documentos quando aplicável (não crítico)
+        await updateDoc(doc(db, 'patients', userToUpdate.id), { passwordResetToken: token, passwordResetExpires: expires }).catch(() => {});
+        await updateDoc(doc(db, 'dentists', userToUpdate.id), { passwordResetToken: token, passwordResetExpires: expires }).catch(() => {});
+        await updateDoc(doc(db, 'attendants', userToUpdate.id), { passwordResetToken: token, passwordResetExpires: expires }).catch(() => {});
+
+        const link = `${window.location.origin}${window.location.pathname}?resetToken=${token}&uid=${encodeURIComponent(userToUpdate.id)}`;
+
+        await emailService.sendPasswordResetEmail(userToUpdate.email, link, userToUpdate.name);
+
+        alert('Enviamos um e-mail com instruções para redefinir sua senha. Verifique sua caixa de entrada.');
         setIsForgotPasswordOpen(false);
         setForgotPasswordEmail('');
         setForgotPasswordCpf('');
@@ -805,21 +928,85 @@ export default function App() {
     }
   };
 
+  // Reset via link: modal and handler
+  const [isResetPasswordOpen, setIsResetPasswordOpen] = useState(false);
+  const [resetToken, setResetToken] = useState('');
+  const [resetUid, setResetUid] = useState('');
+  const [resetNewPassword, setResetNewPassword] = useState('');
+  const [resetConfirmPassword, setResetConfirmPassword] = useState('');
+
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get('resetToken');
+      const uid = params.get('uid');
+      if (token && uid) {
+        setResetToken(token);
+        setResetUid(uid);
+        setIsResetPasswordOpen(true);
+        // limpa os params da URL para não reaparecer o modal
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    } catch (e) {}
+  }, []);
+
+  const handleCompleteReset = async () => {
+    if (resetNewPassword !== resetConfirmPassword) {
+      alert('As senhas não conferem.');
+      return;
+    }
+
+    try {
+      const userSnap = await getDoc(doc(db, 'users', resetUid));
+      if (!userSnap.exists()) {
+        alert('Token inválido ou usuário não encontrado.');
+        return;
+      }
+      const data = userSnap.data() as any;
+      if (!data.passwordResetToken || data.passwordResetToken !== resetToken) {
+        alert('Token inválido.');
+        return;
+      }
+      if (!data.passwordResetExpires || data.passwordResetExpires < Date.now()) {
+        alert('Token expirado.');
+        return;
+      }
+
+      await setDoc(doc(db, 'users', resetUid), { password: resetNewPassword, passwordResetToken: '', passwordResetExpires: null }, { merge: true });
+      await updateDoc(doc(db, 'patients', resetUid), { password: resetNewPassword }).catch(() => {});
+      await updateDoc(doc(db, 'dentists', resetUid), { password: resetNewPassword }).catch(() => {});
+      await updateDoc(doc(db, 'attendants', resetUid), { password: resetNewPassword }).catch(() => {});
+
+      alert('Senha redefinida com sucesso. Você já pode entrar usando a nova senha.');
+      setIsResetPasswordOpen(false);
+      setResetNewPassword('');
+      setResetConfirmPassword('');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, `users/${resetUid}`);
+    }
+  };
+
   if (!user) {
     return (
-      <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-emerald-800 flex items-center justify-center p-4">
+        {globalLoading && <LoadingOverlay />}
         <Card className="w-full max-w-md border-none shadow-2xl">
           <CardHeader className="space-y-4 text-center pb-8">
-            <div className="mx-auto h-16 w-16 rounded-2xl bg-emerald-500 flex items-center justify-center shadow-lg shadow-emerald-500/20">
-              <Stethoscope className="h-10 w-10 text-white" />
+            <div className="mx-auto h-24 w-24 rounded-2xl flex items-center justify-center">
+              <img src="/brasao-BM.png" alt="Logo Bravo Odonto" className="h-20 w-20 object-contain" />
             </div>
             <div className="space-y-1">
-              <CardTitle className="text-2xl font-bold tracking-tight">OdontoClinic</CardTitle>
+              <CardTitle className="text-2xl font-bold tracking-tight">Diretoria de Saúde</CardTitle>
               <CardDescription>Entre com suas credenciais para acessar o sistema</CardDescription>
             </div>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleLogin} className="space-y-4">
+              {sessionExpired && (
+                <div className="p-3 rounded-lg bg-amber-50 text-amber-700 text-sm border border-amber-200 text-center">
+                  Sua sessão foi encerrada por inatividade. Faça login novamente.
+                </div>
+              )}
               {loginError && (
                 <div className="p-3 rounded-lg bg-red-50 text-red-600 text-sm border border-red-100 text-center">
                   {loginError}
@@ -860,19 +1047,22 @@ export default function App() {
                 Entrar no Sistema
               </Button>
               
-              <div className="mt-6 p-4 rounded-xl bg-zinc-50 border border-zinc-100">
-                <p className="text-xs font-semibold text-zinc-500 mb-2 uppercase tracking-wider">Credenciais de Admin:</p>
-                <p className="text-xs text-zinc-400"><b>Email:</b> admin@odonto.com | <b>Senha:</b> 123</p>
-              </div>
-            </form>
+              </form>
           </CardContent>
         </Card>
 
-        <Modal isOpen={isForgotPasswordOpen} onClose={() => setIsForgotPasswordOpen(false)} title="Recuperar Senha">
+        <Modal isOpen={isForgotPasswordOpen} onClose={() => setIsForgotPasswordOpen(false)} title="Recuperar Senha" closeOnBackdropClick={false}>
           <div className="space-y-4">
             <Input label="Email" type="email" value={forgotPasswordEmail} onChange={(e) => setForgotPasswordEmail(e.target.value)} />
-            <Input label="CPF" type="text" value={forgotPasswordCpf} onChange={(e) => setForgotPasswordCpf(e.target.value)} />
+            <Input label="CPF" type="text" value={forgotPasswordCpf} onChange={handleForgotPasswordCpfChange} />
             <Button onClick={handleForgotPassword} className="w-full">Enviar nova senha</Button>
+          </div>
+        </Modal>
+        <Modal isOpen={isResetPasswordOpen} onClose={() => setIsResetPasswordOpen(false)} title="Redefinir Senha" closeOnBackdropClick={false}>
+          <div className="space-y-4">
+            <Input label="Nova senha" type="password" value={resetNewPassword} onChange={(e) => setResetNewPassword(e.target.value)} />
+            <Input label="Confirme a nova senha" type="password" value={resetConfirmPassword} onChange={(e) => setResetConfirmPassword(e.target.value)} />
+            <Button onClick={handleCompleteReset} className="w-full">Redefinir senha</Button>
           </div>
         </Modal>
       </div>
@@ -887,6 +1077,7 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen bg-zinc-50">
+      {globalLoading && <LoadingOverlay />}
       {user && (
         <ProfileEditModal 
           isOpen={isProfileEditOpen} 
@@ -957,6 +1148,63 @@ export default function App() {
               dentists={dentists}
               treatments={treatments}
               onUpdateProfile={updatePatient}
+              onConfirmAppointment={async (id: string) => {
+                try {
+                  await updateAppointmentStatus(id, 'confirmed');
+                  const notif = { id: Math.random().toString(36).substr(2,9), message: 'Agendamento confirmado com sucesso.', type: 'success' as const };
+                  setNotifications(prev => [...prev, notif]);
+                  setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== notif.id)), 5000);
+                } catch (err) {
+                  const notif = { id: Math.random().toString(36).substr(2,9), message: 'Falha ao confirmar agendamento.', type: 'info' as const };
+                  setNotifications(prev => [...prev, notif]);
+                  setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== notif.id)), 5000);
+                  console.error('Confirm appointment error', err);
+                }
+              }}
+              onCancelAppointment={async (id: string) => {
+                try {
+                  await updateAppointmentStatus(id, 'cancelled');
+
+                  // Envia email automático de cancelamento ao paciente (usa titular caso dependente não tenha e-mail)
+                  const apt = appointments.find(a => a.id === id);
+                  if (apt) {
+                    const patient = patients.find(p => p.id === apt.patientId);
+                    const dentist = dentists.find(d => d.id === apt.dentistId);
+                    let patientEmail = patient?.email && String(patient.email).trim() !== '' ? patient!.email : undefined;
+                    if (!patientEmail && patient?.dependentOf) {
+                      const titular = patients.find(p => p.id === patient.dependentOf);
+                      if (titular?.email && String(titular.email).trim() !== '') patientEmail = titular.email;
+                    }
+
+                    const subject = 'Cancelamento de Agendamento - Bravo Odonto';
+                    const dateStr = apt ? parseDate(apt.date).toLocaleDateString('pt-BR') : '';
+                    const timeStr = apt ? apt.time : '';
+                    const dentistName = dentist?.name || '';
+                    const details = `Olá ${patient?.name || 'Paciente'},\n\nInformamos que seu agendamento para ${dateStr} às ${timeStr} com ${dentistName} foi cancelado.\n\nCaso queira reagendar, acesse o portal do paciente ou entre em contato conosco.`;
+
+                    if (patientEmail) {
+                      try {
+                        emailService.sendAppointmentEmail(patientEmail, subject, details);
+                      } catch (e) {
+                        console.error('Falha ao enviar e-mail de cancelamento', e);
+                      }
+                    } else {
+                      const noEmailNotif = { id: Math.random().toString(36).substr(2,9), message: `Paciente não possui e-mail cadastrado — notificação de cancelamento não enviada.`, type: 'info' as const };
+                      setNotifications(prev => [...prev, noEmailNotif]);
+                      setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== noEmailNotif.id)), 5000);
+                    }
+                  }
+
+                  const notif = { id: Math.random().toString(36).substr(2,9), message: 'Agendamento cancelado.', type: 'info' as const };
+                  setNotifications(prev => [...prev, notif]);
+                  setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== notif.id)), 5000);
+                } catch (err) {
+                  const notif = { id: Math.random().toString(36).substr(2,9), message: 'Falha ao cancelar agendamento.', type: 'info' as const };
+                  setNotifications(prev => [...prev, notif]);
+                  setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== notif.id)), 5000);
+                  console.error('Cancel appointment error', err);
+                }
+              }}
             />
           ) : isDentist ? (
             <DentistPortal 

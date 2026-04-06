@@ -48,7 +48,6 @@ export interface Dentist {
   specialty: string;
   cro: string;
   createdAt: string;
-  googleTokens?: any;
   isActive: boolean;
   password?: string;
 }
