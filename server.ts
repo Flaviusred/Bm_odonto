@@ -41,7 +41,7 @@ if (!db) {
 }
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT || 3000);
 const DATA_FILE = path.join(process.cwd(), "data.json");
 
 // Simple file-based debug logger for email flows (helps capture logs when
