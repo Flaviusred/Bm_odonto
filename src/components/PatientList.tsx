@@ -18,6 +18,7 @@ interface PatientListProps {
   onAddPatient: (patient: Omit<Patient, 'id' | 'createdAt' | 'isActive'> & { id?: string }) => void;
   onDeletePatient: (id: string) => void;
   onUpdatePatient: (patient: Patient) => void;
+  onTabChange?: (tab: string) => void;
 }
 
 export function PatientList({ 
@@ -27,7 +28,8 @@ export function PatientList({
   dentists, 
   onAddPatient, 
   onDeletePatient, 
-  onUpdatePatient 
+  onUpdatePatient,
+  onTabChange
 }: PatientListProps) {
   return (
     <PatientListContent 
@@ -37,7 +39,8 @@ export function PatientList({
       dentists={dentists} 
       onAddPatient={onAddPatient} 
       onDeletePatient={onDeletePatient} 
-      onUpdatePatient={onUpdatePatient} 
+      onUpdatePatient={onUpdatePatient}
+      onTabChange={onTabChange}
     />
   );
 }
@@ -49,7 +52,8 @@ function PatientListContent({
   dentists, 
   onAddPatient, 
   onDeletePatient, 
-  onUpdatePatient 
+  onUpdatePatient,
+  onTabChange
 }: PatientListProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -69,6 +73,10 @@ function PatientListContent({
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [viewingDependentsOf, setViewingDependentsOf] = useState<Patient | null>(null);
+
+  const handleBackFromPatients = () => {
+    onTabChange?.('dashboard');
+  };
 
   const handleSearchCBMPB = async () => {
     if (!cbmpbIdentifier) return;
@@ -911,11 +919,17 @@ return (
   <>
     <div className="p-4 lg:p-8 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-bold text-zinc-900">Pacientes</h1>
-          <p className="text-zinc-500 text-sm">Gerencie o cadastro de seus pacientes</p>
+        <div className="space-y-2">
+          <Button className="gap-2 sm:hidden w-fit h-10 px-4" onClick={handleBackFromPatients}>
+            <ArrowLeft className="h-4 w-4" />
+            Voltar
+          </Button>
+          <div>
+            <h1 className="text-2xl font-bold text-zinc-900">Pacientes</h1>
+            <p className="text-zinc-500 text-sm">Gerencie o cadastro de seus pacientes</p>
+          </div>
         </div>
-        <Button onClick={() => setIsModalOpen(true)} className="flex items-center justify-center gap-2 w-full sm:w-auto h-10">
+        <Button onClick={() => setIsModalOpen(true)} className="gap-2 w-full sm:w-auto h-10">
           <Plus className="h-4 w-4" />
           <span className="whitespace-nowrap">Novo Paciente</span>
         </Button>

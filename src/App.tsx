@@ -126,6 +126,8 @@ export default function App() {
 
   const [notifications, setNotifications] = useState<{ id: string; message: string; type: 'info' | 'success' }[]>([]);
   const [unseenCount, setUnseenCount] = useState(0);
+  const dentistSeenAppointmentIdsRef = React.useRef<Set<string>>(new Set());
+  const dentistNotifInitializedRef = React.useRef(false);
   const [reminderSettings, setReminderSettings] = useState({
     emailReminders: true,
     reminderHoursBefore: 24
@@ -587,6 +589,49 @@ export default function App() {
     }
   }, [activeTab, user]);
 
+  // Shows dentist notifications for new appointments regardless of who created them.
+  useEffect(() => {
+    if (user?.role !== 'dentist') {
+      dentistSeenAppointmentIdsRef.current = new Set();
+      dentistNotifInitializedRef.current = false;
+      return;
+    }
+
+    const myAppointments = appointments.filter(a => a.dentistId === user.id && a.status !== 'cancelled');
+    const currentIds = new Set(myAppointments.map(a => a.id));
+
+    if (!dentistNotifInitializedRef.current) {
+      dentistSeenAppointmentIdsRef.current = currentIds;
+      dentistNotifInitializedRef.current = true;
+      return;
+    }
+
+    const newAppointments = myAppointments.filter(a => !dentistSeenAppointmentIdsRef.current.has(a.id));
+    if (newAppointments.length > 0) {
+      const newNotifs = newAppointments.map((apt) => {
+        const patientName = patients.find(p => p.id === apt.patientId)?.name || 'Paciente';
+        return {
+          id: Math.random().toString(36).substr(2, 9),
+          message: `Novo agendamento: ${patientName} em ${parseDate(apt.date).toLocaleDateString('pt-BR')} às ${apt.time}`,
+          type: 'success' as const,
+        };
+      });
+
+      setNotifications(prev => [...prev, ...newNotifs]);
+      if (activeTab !== 'dentist-appointments') {
+        setUnseenCount(prev => prev + newNotifs.length);
+      }
+
+      newNotifs.forEach((notif) => {
+        setTimeout(() => {
+          setNotifications(prev => prev.filter(n => n.id !== notif.id));
+        }, 5000);
+      });
+    }
+
+    dentistSeenAppointmentIdsRef.current = currentIds;
+  }, [appointments, patients, user, activeTab]);
+
   const addAppointment = async (data: Omit<Appointment, 'id' | 'createdAt'>) => {
     // Conflict detection
     const conflict = appointments.find(a => 
@@ -658,18 +703,6 @@ export default function App() {
           setNotifications(prev => [...prev, patientNotif]);
           setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== patientNotif.id)), 5000);
         }
-      }
-
-      // Notification logic
-      if (user?.role === 'dentist' && data.dentistId === user.id) {
-        const patientName = patients.find(p => p.id === data.patientId)?.name || 'Paciente';
-        const newNotification = {
-          id: Math.random().toString(36).substr(2, 9),
-          message: `Novo agendamento: ${patientName} em ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}`,
-          type: 'success' as const
-        };
-        setNotifications(prev => [...prev, newNotification]);
-        setUnseenCount(prev => prev + 1);
       }
 
       // Request server to sync this appointment to connected Google Calendars
@@ -1243,6 +1276,7 @@ export default function App() {
                   onAddPatient={addPatient}
                   onDeletePatient={deletePatient}
                   onUpdatePatient={updatePatient}
+                  onTabChange={setActiveTab}
                 />
               )}
               {activeTab === 'appointments' && (
@@ -1355,6 +1389,7 @@ export default function App() {
                   onAddAttendant={addAttendant}
                   onDeleteAttendant={deleteAttendant}
                   onUpdateAttendant={updateAttendant}
+                  onTabChange={setActiveTab}
                 />
               )}
               {activeTab === 'treatments' && (
