@@ -587,6 +587,13 @@ app.post('/api/fix-dependents-emails', (req, res) => {
 const createTransportFromEnv = () => {
   const provider = (process.env.SMTP_PROVIDER || "gmail").toLowerCase();
 
+  // sensible timeouts to avoid long hangs on platforms that block SMTP
+  const defaultTimeoutOpts = {
+    connectionTimeout: Number(process.env.SMTP_CONNECTION_TIMEOUT || 10000),
+    greetingTimeout: Number(process.env.SMTP_GREETING_TIMEOUT || 10000),
+    socketTimeout: Number(process.env.SMTP_SOCKET_TIMEOUT || 20000),
+  };
+
   try {
     if (provider === "sendgrid" || provider === "sendgrid-smtp") {
       const apiKey = process.env.SENDGRID_API_KEY;
@@ -599,6 +606,7 @@ const createTransportFromEnv = () => {
           user: process.env.SENDGRID_SMTP_USER || "apikey",
           pass: apiKey,
         },
+        ...defaultTimeoutOpts,
       });
     }
 
@@ -615,6 +623,7 @@ const createTransportFromEnv = () => {
           user: process.env.SMTP_USER,
           pass: process.env.SMTP_PASS,
         },
+        ...defaultTimeoutOpts,
       });
     }
 
@@ -625,6 +634,7 @@ const createTransportFromEnv = () => {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
       },
+      ...defaultTimeoutOpts,
     });
   } catch (err) {
     console.error("Error creating transporter:", err);
@@ -775,6 +785,24 @@ const sendRawEmail = async (to: string, subject: string, text?: string, html?: s
 
   let transporter;
   try { transporter = createTransportFromEnv(); } catch (err) { console.error('Transport configuration error (raw):', err); throw err; }
+
+  // Early diagnostics: log whether SMTP credentials are present and verify transporter
+  try {
+    const hasCredentials = !!(process.env.EMAIL_USER || process.env.SMTP_USER || process.env.SENDGRID_API_KEY);
+    console.log(`sendRawEmail: smtpCredsPresent=${hasCredentials} provider=${process.env.SMTP_PROVIDER || 'gmail'}`);
+    appendDebugLog(`sendRawEmail: smtpCredsPresent=${hasCredentials} provider=${process.env.SMTP_PROVIDER || 'gmail'}`);
+    try {
+      await transporter.verify();
+      console.log('SMTP verify OK (raw send)');
+      appendDebugLog('SMTP verify OK (raw send)');
+    } catch (verifyErr) {
+      console.error('SMTP verify failed (raw):', verifyErr);
+      appendDebugLog(`SMTP verify failed (raw): ${verifyErr instanceof Error ? verifyErr.message : String(verifyErr)}`);
+      throw verifyErr;
+    }
+  } catch (diagErr) {
+    // let outer try/catch handle failures
+  }
 
   // Build HTML wrapper like in sendEmail
   const siteUrl = process.env.SITE_URL || `http://localhost:${PORT}`;
