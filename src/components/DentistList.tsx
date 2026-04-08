@@ -37,8 +37,8 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
   });
 
   const filteredDentists = dentists.filter(d => 
-    d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    d.specialty.toLowerCase().includes(searchTerm.toLowerCase())
+    (d.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (d.specialty || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const validate = () => {
@@ -406,11 +406,11 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
               >
                 <div className="flex items-center gap-3 group/name text-left flex-1 min-w-0">
                   <div className="h-10 w-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold transition-colors group-hover/name:bg-emerald-100 shrink-0">
-                    {dentist.name.charAt(0)}
+                    {(dentist.name || '?').charAt(0)}
                   </div>
                   <div className="flex flex-col min-w-0">
                     <span className="font-medium text-zinc-900 group-hover/name:text-emerald-600 transition-colors truncate">
-                      {dentist.name}
+                      {dentist.name || '—'}
                     </span>
                     <div className="flex flex-wrap gap-1 mt-0.5">
                       <span className="text-[10px] text-zinc-500 uppercase font-bold">CRO: {dentist.cro}</span>

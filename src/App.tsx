@@ -28,8 +28,9 @@ import { Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
 import { emailService } from './services/emailService';
 import LoadingOverlay from './components/LoadingOverlay';
 import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
-import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, getDocs, query, where, Timestamp } from 'firebase/firestore';
-import { db, auth } from './firebase';
+import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField } from 'firebase/firestore';
+import { sendPasswordResetEmail, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { db, auth, createAuthUserWithSecondaryApp } from './firebase';
 
 enum OperationType {
   CREATE = 'create',
@@ -184,6 +185,18 @@ export default function App() {
     }
   };
 
+  const stripPassword = <T extends Record<string, any>>(obj: T): Omit<T, 'password'> => {
+    const { password, ...safe } = obj;
+    return safe;
+  };
+
+  const clearLegacyPasswords = async (id: string) => {
+    await setDoc(doc(db, 'users', id), { password: deleteField() }, { merge: true });
+    await setDoc(doc(db, 'patients', id), { password: deleteField() }, { merge: true }).catch(() => {});
+    await setDoc(doc(db, 'dentists', id), { password: deleteField() }, { merge: true }).catch(() => {});
+    await setDoc(doc(db, 'attendants', id), { password: deleteField() }, { merge: true }).catch(() => {});
+  };
+
   // Persistence
   useEffect(() => {
     if (user) sessionStorage.setItem('odonto_user', JSON.stringify(user));
@@ -192,9 +205,19 @@ export default function App() {
 
   const addUser = async (data: Omit<User, 'id'>) => {
     const id = Math.random().toString(36).substr(2, 9);
-    const newUser: User = {
-      ...data,
+    const email = data.email.trim().toLowerCase();
+    const password = (data as any).password as string | undefined;
+
+    if (!password || password.length < 6) {
+      throw new Error('Senha deve ter pelo menos 6 caracteres para criar conta no Firebase Auth.');
+    }
+
+    const authUid = await createAuthUserWithSecondaryApp(email, password);
+    const newUser: User & { authUid?: string } = {
+      ...(stripPassword(data as any) as Omit<User, 'id'>),
       id,
+      email,
+      authUid,
     };
     
     try {
@@ -209,7 +232,6 @@ export default function App() {
             phone: newUser.phone || '',
             createdAt: new Date().toISOString(),
             isActive: true,
-            password: newUser.password,
           };
           await setDoc(doc(db, 'attendants', id), newAttendant);
         } else if (newUser.role === 'dentist') {
@@ -222,7 +244,6 @@ export default function App() {
             cro: (data as any).cro || '00000',
             createdAt: new Date().toISOString(),
             isActive: true,
-            password: newUser.password,
           };
           await setDoc(doc(db, 'dentists', id), newDentist);
         }
@@ -259,8 +280,14 @@ export default function App() {
     try {
       await runWithLoading(async () => {
         const userRef = doc(db, 'users', updated.id);
-        await setDoc(userRef, updated, { merge: true });
+        const safeUpdated = stripPassword(updated as any);
+        await setDoc(userRef, safeUpdated, { merge: true });
+        await setDoc(userRef, { password: deleteField() }, { merge: true });
         console.log('Usuário atualizado no Firestore com sucesso');
+
+        if ((updated as any).password && updated.email) {
+          await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
+        }
 
         // If user is a dentist, update the dentist record too
         if (updated.role === 'dentist') {
@@ -269,18 +296,18 @@ export default function App() {
             name: updated.name,
             email: updated.email,
             phone: updated.phone || '',
-            password: updated.password,
             cro: (updated as any).cro,
             specialty: (updated as any).specialty
           }, { merge: true });
+          await setDoc(dentistRef, { password: deleteField() }, { merge: true }).catch(() => {});
         } else if (updated.role === 'attendant') {
           const attendantRef = doc(db, 'attendants', updated.id);
           await setDoc(attendantRef, {
             name: updated.name,
             email: updated.email,
             phone: updated.phone || '',
-            password: updated.password
           }, { merge: true });
+          await setDoc(attendantRef, { password: deleteField() }, { merge: true }).catch(() => {});
         }
       });
 
@@ -320,28 +347,160 @@ export default function App() {
     }
   };
 
-  const handleLogin = (e: React.FormEvent<HTMLFormElement>) => {
+  const resolveLegacyUserByCredentials = (email: string, password: string): (User & { authUid?: string }) | null => {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const directUser = users.find((u: any) => u.email?.toLowerCase() === normalizedEmail && u.password === password);
+    if (directUser) {
+      return stripPassword(directUser as any) as User;
+    }
+
+    const legacyDentist = dentists.find((d: any) => d.email?.toLowerCase() === normalizedEmail && d.password === password);
+    if (legacyDentist) {
+      const existingUser = users.find(u => u.id === legacyDentist.id || u.email.toLowerCase() === normalizedEmail);
+      return {
+        id: existingUser?.id || legacyDentist.id,
+        name: existingUser?.name || legacyDentist.name,
+        email: normalizedEmail,
+        role: existingUser?.role || 'dentist',
+        permissions: existingUser?.permissions || ['patients', 'appointments', 'treatments'],
+        phone: existingUser?.phone || legacyDentist.phone,
+        photoURL: existingUser?.photoURL,
+        cpf: existingUser?.cpf,
+      };
+    }
+
+    const legacyAttendant = attendants.find((a: any) => a.email?.toLowerCase() === normalizedEmail && a.password === password);
+    if (legacyAttendant) {
+      const existingUser = users.find(u => u.id === legacyAttendant.id || u.email.toLowerCase() === normalizedEmail);
+      return {
+        id: existingUser?.id || legacyAttendant.id,
+        name: existingUser?.name || legacyAttendant.name,
+        email: normalizedEmail,
+        role: existingUser?.role || 'attendant',
+        permissions: existingUser?.permissions || ['patients', 'appointments'],
+        phone: existingUser?.phone || legacyAttendant.phone,
+        photoURL: existingUser?.photoURL,
+        cpf: existingUser?.cpf,
+      };
+    }
+
+    const legacyPatient = patients.find((p: any) => p.email?.toLowerCase() === normalizedEmail && p.password === password);
+    if (legacyPatient) {
+      const existingUser = users.find(u => u.id === legacyPatient.id || u.email.toLowerCase() === normalizedEmail);
+      return {
+        id: existingUser?.id || legacyPatient.id,
+        name: existingUser?.name || legacyPatient.name,
+        email: normalizedEmail,
+        role: existingUser?.role || 'patient',
+        permissions: existingUser?.permissions || ['patient-profile'],
+        phone: existingUser?.phone || legacyPatient.phone,
+        photoURL: existingUser?.photoURL,
+        cpf: existingUser?.cpf || legacyPatient.cpf,
+      };
+    }
+
+    return null;
+  };
+
+  const canFallbackToLegacySession = (error: any) => {
+    const code = String(error?.code || '');
+    return [
+      'auth/operation-not-allowed',
+      'auth/invalid-api-key',
+      'auth/network-request-failed',
+      'auth/internal-error',
+      'auth/too-many-requests',
+      'auth/configuration-not-found',
+      'auth/recaptcha-not-enabled'
+    ].includes(code);
+  };
+
+  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoginError(null);
     const formData = new FormData(e.currentTarget);
-    const email = formData.get('email') as string;
+    const email = (formData.get('email') as string).trim().toLowerCase();
     const password = formData.get('password') as string;
-    
-    const user = users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.password === password);
-    
-    if (user) {
-      setUser(user);
-      setSessionExpired(false);
-      sessionStorage.setItem('odonto_user', JSON.stringify(user));
-      setActiveTab(user.role === 'patient' ? 'patient-profile' : user.role === 'dentist' ? 'dentist-appointments' : 'dashboard');
-      logAction('Login', 'system', user.id, `Usuário ${user.name} entrou no sistema.`);
-    } else {
+
+    try {
+      await runWithLoading(async () => {
+        let authUid = '';
+        let legacySessionUser: (User & { authUid?: string }) | null = null;
+
+        try {
+          const credential = await signInWithEmailAndPassword(auth, email, password);
+          authUid = credential.user.uid;
+        } catch (authErr: any) {
+          const legacyUser = resolveLegacyUserByCredentials(email, password);
+          if (!legacyUser) {
+            throw authErr;
+          }
+          legacySessionUser = legacyUser;
+
+          // Se Email/Senha estiver desabilitado no Firebase Auth, mantém acesso legado
+          // sem persistir flag local; evita chamadas que geram 400 no console.
+          let skipAuthMigration = false;
+          if (canFallbackToLegacySession(authErr)) {
+            console.warn('Firebase Email/Password indisponível, usando fallback legado para', email);
+            await setDoc(doc(db, 'users', legacyUser.id), { ...legacyUser }, { merge: true }).catch(() => {});
+            skipAuthMigration = true;
+          }
+
+          // Migração automática para Firebase Auth quando possível.
+          if (!skipAuthMigration && password.length >= 6) {
+            try {
+              await createAuthUserWithSecondaryApp(email, password);
+            } catch (createErr: any) {
+              if (createErr?.code !== 'auth/email-already-in-use' && !canFallbackToLegacySession(createErr)) {
+                throw createErr;
+              }
+            }
+
+            try {
+              const credential = await signInWithEmailAndPassword(auth, email, password);
+              authUid = credential.user.uid;
+              await setDoc(doc(db, 'users', legacyUser.id), { ...legacyUser, authUid }, { merge: true });
+              await clearLegacyPasswords(legacyUser.id);
+            } catch (migrationErr: any) {
+              if (!canFallbackToLegacySession(migrationErr) && !canFallbackToLegacySession(authErr)) {
+                throw migrationErr;
+              }
+              await setDoc(doc(db, 'users', legacyUser.id), { ...legacyUser }, { merge: true }).catch(() => {});
+            }
+          } else {
+            await setDoc(doc(db, 'users', legacyUser.id), { ...legacyUser }, { merge: true }).catch(() => {});
+          }
+        }
+
+        const appUser = authUid
+          ? (users.find((u: any) => u.authUid === authUid) || users.find(u => u.email.toLowerCase() === email))
+          : legacySessionUser;
+        if (!appUser) {
+          await signOut(auth).catch(() => {});
+          setLoginError('Conta autenticada, mas perfil não encontrado no sistema.');
+          return;
+        }
+
+        if (!(appUser as any).authUid) {
+          await setDoc(doc(db, 'users', appUser.id), { authUid }, { merge: true });
+        }
+
+        setUser(appUser);
+        setSessionExpired(false);
+        sessionStorage.setItem('odonto_user', JSON.stringify(appUser));
+        setActiveTab(appUser.role === 'patient' ? 'patient-profile' : appUser.role === 'dentist' ? 'dentist-appointments' : 'dashboard');
+        logAction('Login', 'system', appUser.id, `Usuário ${appUser.name} entrou no sistema.`);
+      });
+    } catch (error) {
+      console.error('Login error:', error);
       setLoginError('Credenciais incorretas.');
     }
   };
 
-  const handleLogout = (expired = false) => {
+  const handleLogout = async (expired = false) => {
     if (user) logAction('Logout', 'system', user.id, expired ? `${user.name} sessão encerrada por inatividade.` : `${user.name} saiu do sistema.`);
+    await signOut(auth).catch(() => {});
     setUser(null);
     sessionStorage.removeItem('odonto_user');
     setActiveTab('dashboard');
@@ -391,14 +550,22 @@ export default function App() {
         await setDoc(doc(db, 'patients', id), newPatient);
 
         // Criar usuário correspondente para o portal do paciente
-        const newUser: User = {
+        const patientPassword = (data as any).password as string | undefined;
+        const hasEmail = !!(newPatient.email && newPatient.email.trim());
+        let authUid: string | undefined;
+
+        if (hasEmail && patientPassword && patientPassword.length >= 6) {
+          authUid = await createAuthUserWithSecondaryApp(newPatient.email.trim().toLowerCase(), patientPassword);
+        }
+
+        const newUser: User & { authUid?: string } = {
           id,
           name: newPatient.name,
           email: newPatient.email,
-          password: (data as any).password || Math.random().toString(36).substr(2, 8),
           role: 'patient',
           permissions: ['patient-profile'],
-          phone: newPatient.phone
+          phone: newPatient.phone,
+          ...(authUid ? { authUid } : {})
         };
         await setDoc(doc(db, 'users', id), newUser);
       });
@@ -436,13 +603,14 @@ export default function App() {
   const updatePatient = async (updated: Patient) => {
     try {
       await runWithLoading(async () => {
-        await setDoc(doc(db, 'patients', updated.id), updated, { merge: true });
+        const safePatient = stripPassword(updated as any);
+        await setDoc(doc(db, 'patients', updated.id), safePatient, { merge: true });
+        await setDoc(doc(db, 'patients', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
 
-        // Se o paciente tiver uma senha, atualiza o usuário correspondente
-        if ((updated as any).password) {
-          await setDoc(doc(db, 'users', updated.id), {
-            password: (updated as any).password
-          }, { merge: true });
+        // Em vez de persistir senha em texto, envia link de redefinição.
+        if ((updated as any).password && updated.email) {
+          await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
+          await setDoc(doc(db, 'users', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
         }
       });
 
@@ -455,8 +623,15 @@ export default function App() {
   // Dentist Handlers
   const addDentist = async (data: Omit<Dentist, 'id' | 'createdAt' | 'isActive'>) => {
     const id = Math.random().toString(36).substr(2, 9);
+    const password = (data as any).password as string | undefined;
+    let authUid: string | undefined;
+
+    if (password && password.length >= 6) {
+      authUid = await createAuthUserWithSecondaryApp(data.email.trim().toLowerCase(), password);
+    }
+
     const newDentist: Dentist = {
-      ...data,
+      ...(stripPassword(data as any) as Omit<Dentist, 'id' | 'createdAt' | 'isActive'>),
       id,
       createdAt: new Date().toISOString(),
       isActive: true
@@ -469,10 +644,10 @@ export default function App() {
         id,
         name: newDentist.name,
         email: newDentist.email,
-        password: newDentist.password,
         role: 'dentist',
         permissions: ['patients', 'appointments', 'treatments'],
-        phone: newDentist.phone
+        phone: newDentist.phone,
+        ...(authUid ? { authUid } : {})
       };
       await setDoc(doc(db, 'users', id), newUser);
       
@@ -505,16 +680,21 @@ export default function App() {
 
   const updateDentist = async (updated: Dentist) => {
     try {
-      await setDoc(doc(db, 'dentists', updated.id), updated, { merge: true });
+      const safeUpdated = stripPassword(updated as any);
+      await setDoc(doc(db, 'dentists', updated.id), safeUpdated, { merge: true });
+      await setDoc(doc(db, 'dentists', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
       
       // Atualizar usuário correspondente
       const userRef = doc(db, 'users', updated.id);
       await setDoc(userRef, {
         name: updated.name,
         email: updated.email,
-        password: updated.password,
         phone: updated.phone
       }, { merge: true });
+      await setDoc(userRef, { password: deleteField() }, { merge: true }).catch(() => {});
+      if ((updated as any).password && updated.email) {
+        await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
+      }
       
       logAction('Edição', 'dentist', updated.id, `Dentista ${updated.name} atualizado.`);
     } catch (error) {
@@ -525,8 +705,15 @@ export default function App() {
   // Attendant Handlers
   const addAttendant = async (data: Omit<Attendant, 'id' | 'createdAt' | 'isActive'>) => {
     const id = Math.random().toString(36).substr(2, 9);
+    const password = (data as any).password as string | undefined;
+    let authUid: string | undefined;
+
+    if (password && password.length >= 6) {
+      authUid = await createAuthUserWithSecondaryApp(data.email.trim().toLowerCase(), password);
+    }
+
     const newAttendant: Attendant = {
-      ...data,
+      ...(stripPassword(data as any) as Omit<Attendant, 'id' | 'createdAt' | 'isActive'>),
       id,
       createdAt: new Date().toISOString(),
       isActive: true
@@ -539,10 +726,10 @@ export default function App() {
         id,
         name: newAttendant.name,
         email: newAttendant.email,
-        password: newAttendant.password,
         role: 'attendant',
         permissions: ['patients', 'appointments'],
-        phone: newAttendant.phone
+        phone: newAttendant.phone,
+        ...(authUid ? { authUid } : {})
       };
       await setDoc(doc(db, 'users', id), newUser);
       
@@ -565,16 +752,21 @@ export default function App() {
 
   const updateAttendant = async (updated: Attendant) => {
     try {
-      await setDoc(doc(db, 'attendants', updated.id), updated, { merge: true });
+      const safeUpdated = stripPassword(updated as any);
+      await setDoc(doc(db, 'attendants', updated.id), safeUpdated, { merge: true });
+      await setDoc(doc(db, 'attendants', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
       
       // Atualizar usuário correspondente
       const userRef = doc(db, 'users', updated.id);
       await setDoc(userRef, {
         name: updated.name,
         email: updated.email,
-        password: updated.password,
         phone: updated.phone
       }, { merge: true });
+      await setDoc(userRef, { password: deleteField() }, { merge: true }).catch(() => {});
+      if ((updated as any).password && updated.email) {
+        await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
+      }
       
       logAction('Edição', 'attendant', updated.id, `Atendente ${updated.name} atualizado.`);
     } catch (error) {
@@ -933,23 +1125,9 @@ export default function App() {
     }
 
     if (userToUpdate) {
-      // Gera um token temporário para redefinição e salva no documento do usuário
-      const token = (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
-      const expires = Date.now() + 60 * 60 * 1000; // 1 hora
-
       try {
-        await setDoc(doc(db, 'users', userToUpdate.id), { passwordResetToken: token, passwordResetExpires: expires, email: userToUpdate.email, name: userToUpdate.name }, { merge: true });
-
-        // Também marca em outros documentos quando aplicável (não crítico)
-        await updateDoc(doc(db, 'patients', userToUpdate.id), { passwordResetToken: token, passwordResetExpires: expires }).catch(() => {});
-        await updateDoc(doc(db, 'dentists', userToUpdate.id), { passwordResetToken: token, passwordResetExpires: expires }).catch(() => {});
-        await updateDoc(doc(db, 'attendants', userToUpdate.id), { passwordResetToken: token, passwordResetExpires: expires }).catch(() => {});
-
-        const link = `${window.location.origin}${window.location.pathname}?resetToken=${token}&uid=${encodeURIComponent(userToUpdate.id)}`;
-
-        await emailService.sendPasswordResetEmail(userToUpdate.email, link, userToUpdate.name);
-
-        alert('Enviamos um e-mail com instruções para redefinir sua senha. Verifique sua caixa de entrada.');
+        await sendPasswordResetEmail(auth, String(userToUpdate.email).toLowerCase());
+        alert('Enviamos um e-mail do Firebase Authentication para redefinição de senha. Verifique sua caixa de entrada.');
         setIsForgotPasswordOpen(false);
         setForgotPasswordEmail('');
         setForgotPasswordCpf('');

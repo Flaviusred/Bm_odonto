@@ -66,7 +66,7 @@ export function AgendaView({
     if (!patient) return;
 
     const date = parseDate(apt.date).toLocaleDateString('pt-BR');
-    const message = `Olá ${patient.name}, este é um lembrete da sua consulta na OdontoClinic com ${getDentistName(apt.dentistId)} no dia ${date} às ${apt.time}.`;
+    const message = `Olá aqui é uma mensagem da Diretoria de Saúde - CBMPB ${patient.name}, este é um lembrete da sua consulta no Gabinete Odontológico com ${getDentistName(apt.dentistId)} no dia ${date} às ${apt.time}.`;
     const phone = patient.phone.replace(/\D/g, '');
     const url = `https://wa.me/55${phone}?text=${encodeURIComponent(message)}`;
     window.open(url, '_blank');

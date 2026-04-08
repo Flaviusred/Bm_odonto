@@ -82,9 +82,39 @@ const saveData = (data: any) => {
 const saveTokensForUserFirebase = async (userId: string, role: 'dentist' | 'patient', tokens: any) => {
   try {
     const col = role === 'dentist' ? 'dentists' : 'patients';
-    await db.collection(col).doc(userId).set({ googleTokens: tokens }, { merge: true });
+    const docRef = db.collection(col).doc(userId);
+    let wroteToFirestore = false;
+
+    try {
+      const snap = await docRef.get();
+      if (snap.exists) {
+        await docRef.set({ googleTokens: tokens }, { merge: true });
+        wroteToFirestore = true;
+      } else {
+        // If the domain document does not exist, attempt to enrich with Firebase Auth info
+        // to avoid creating a blank dentist/patient doc that shows up empty in the UI.
+        try {
+          const adminUser = admin && admin.auth ? await admin.auth().getUser(userId) : null;
+          const name = adminUser?.displayName || '';
+          const email = adminUser?.email || '';
+          if (name || email) {
+            await docRef.set({ googleTokens: tokens, name, email }, { merge: true });
+            wroteToFirestore = true;
+          } else {
+            // Do not create a minimal/empty doc — skip storing tokens to avoid blank UI entries
+            console.warn(`Skipping creation of empty ${col} document for user ${userId} when saving google tokens.`);
+          }
+        } catch (e) {
+          console.warn('Failed to lookup admin user to enrich new doc, skipping creation of empty doc', e);
+        }
+      }
+    } catch (e) {
+      console.warn('Failed while checking/setting Firestore doc for google tokens', e);
+    }
+
     // Also keep local data.json in sync when present (backwards compatibility)
     try {
+      if (!wroteToFirestore) return; // nothing to persist locally if we didn't create/update Firestore
       const data = getData();
       if (role === 'dentist') {
         const idx = (data.dentists || []).findIndex((d: any) => d.id === userId);
