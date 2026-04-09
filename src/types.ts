@@ -30,6 +30,7 @@ export interface Patient {
   city?: string;
   state?: string;
   anamnesis?: string;
+  authUid?: string;
   createdAt: string;
   isActive: boolean;
   patientType: PatientType;
@@ -50,6 +51,7 @@ export interface Dentist {
   createdAt: string;
   isActive: boolean;
   password?: string;
+  authUid?: string;
 }
 
 export interface Attendant {
@@ -60,6 +62,7 @@ export interface Attendant {
   createdAt: string;
   isActive: boolean;
   password?: string;
+  authUid?: string;
 }
 
 export interface Appointment {
@@ -68,10 +71,12 @@ export interface Appointment {
   dentistId: string;
   date: string;
   time: string;
-  status: 'scheduled' | 'confirmed' | 'cancelled' | 'completed' | 'blocked';
+  status: 'Agendado' | 'Confirmado' | 'Cancelado' | 'Concluído' | 'Bloqueado';
   notes?: string;
   createdAt: string;
   googleEventId?: string;
+  patientAuthUid?: string | null;
+  dentistAuthUid?: string | null;
 }
 
 export interface Treatment {
@@ -80,18 +85,20 @@ export interface Treatment {
   dentistId: string;
   appointmentId: string;
   description: string;
-  type?: 'cleaning' | 'extraction' | 'filling' | 'root-canal' | 'orthodontics' | 'other';
+  type?: 'Limpeza' | 'Extração' | 'Obturação' | 'Canal' | 'Ortodontia' | 'Outro';
   date: string;
   createdAt: string;
+  patientAuthUid?: string | null;
 }
 
 export interface PatientDocument {
   id: string;
   patientId: string;
   name: string;
-  type: 'exam' | 'document' | 'x-ray';
+  type: 'Exame' | 'Documento' | 'Raio-X';
   url: string;
   uploadedAt: string;
+  patientAuthUid?: string | null;
 }
 
 export interface InventoryItem {
@@ -108,7 +115,7 @@ export interface InventoryMovement {
   id: string;
   itemId: string;
   itemName: string;
-  type: 'in' | 'out';
+  type: 'entrada' | 'saida';
   quantity: number;
   reason: string;
   date: string;

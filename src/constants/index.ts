@@ -1,19 +1,19 @@
 // Constantes globais do projeto OdontoClinic
 
 export const APPOINTMENT_STATUS = {
-  SCHEDULED: 'scheduled',
-  CONFIRMED: 'confirmed',
-  COMPLETED: 'completed',
-  CANCELLED: 'cancelled',
+  SCHEDULED: 'Agendado',
+  CONFIRMED: 'Confirmado',
+  COMPLETED: 'Concluído',
+  CANCELLED: 'Cancelado',
 } as const;
 
 export const TREATMENT_TYPES = {
-  CLEANING: 'cleaning',
-  EXTRACTION: 'extraction',
-  FILLING: 'filling',
-  ROOT_CANAL: 'root-canal',
-  ORTHODONTICS: 'orthodontics',
-  OTHER: 'other',
+  CLEANING: 'Limpeza',
+  EXTRACTION: 'Extração',
+  FILLING: 'Obturação',
+  ROOT_CANAL: 'Canal',
+  ORTHODONTICS: 'Ortodontia',
+  OTHER: 'Outro',
 } as const;
 
 export const DOCUMENT_TYPES = {

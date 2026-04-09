@@ -42,8 +42,9 @@ interface DentistPortalProps {
   onUpdateTreatment: (treatment: Treatment) => void;
   onAddDocument: (doc: Omit<PatientDocument, 'id' | 'uploadedAt'>) => void;
   onUpdateAppointmentStatus: (id: string, status: Appointment['status']) => void;
-  notifications: { id: string; message: string; type: 'info' | 'success' }[];
-  setNotifications: React.Dispatch<React.SetStateAction<{ id: string; message: string; type: 'info' | 'success' }[]>>;
+  unseenCount: number;
+  setUnseenCount: React.Dispatch<React.SetStateAction<number>>;
+  markAllNotificationsRead?: () => Promise<void> | (() => void);
 }
 
 export function DentistPortal({ 
@@ -60,8 +61,8 @@ export function DentistPortal({
   onUpdateTreatment,
   onAddDocument,
   onUpdateAppointmentStatus,
-  notifications,
-  setNotifications
+  unseenCount, setUnseenCount,
+  markAllNotificationsRead
 }: DentistPortalProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
@@ -362,11 +363,11 @@ export function DentistPortal({
     <div className="flex flex-col h-full">
       <header className="flex items-center justify-between p-4 bg-white border-b border-zinc-200">
         <h1 className="text-xl font-bold">Portal do Dentista</h1>
-        <div className="relative cursor-pointer" onClick={() => setNotifications([])}>
+        <div className="relative cursor-pointer" onClick={() => { markAllNotificationsRead?.(); setUnseenCount(0); }}>
           <Bell className="h-6 w-6 text-zinc-600" />
-          {notifications.length > 0 && (
+          {(unseenCount > 0) && (
             <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
-              {notifications.length}
+              {unseenCount}
             </span>
           )}
         </div>
@@ -499,9 +500,9 @@ export function DentistPortal({
                     {treatments
                       .filter(t => t.patientId === selectedPatient.id)
                       .filter(t => 
-                        t.description.toLowerCase().includes(historySearch.toLowerCase()) ||
-                        (t.type && t.type.toLowerCase().includes(historySearch.toLowerCase()))
-                      )
+                          (t.description || '').toLowerCase().includes(historySearch.toLowerCase()) ||
+                          ((t.type || '').toLowerCase().includes(historySearch.toLowerCase()))
+                        )
                       .sort((a, b) => parseDate(b.date).getTime() - parseDate(a.date).getTime())
                       .map(t => {
                         const isExpanded = expandedTreatments.includes(t.id);
@@ -777,15 +778,15 @@ export function DentistPortal({
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {patients.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase())).map(patient => (
+                {patients.filter(p => (p.name || '').toLowerCase().includes(searchTerm.toLowerCase())).map(patient => (
                   <Card key={patient.id} className="border-none shadow-sm hover:ring-2 hover:ring-emerald-500 transition-all cursor-pointer" onClick={() => setSelectedPatient(patient)}>
                     <CardContent className="p-6">
                       <div className="flex items-center gap-4">
                         <div className="h-12 w-12 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-600 font-bold">
-                          {patient.name.charAt(0)}
+                          {(patient.name || 'Paciente').charAt(0)}
                         </div>
                         <div className="flex-1">
-                          <h3 className="font-bold text-zinc-900">{patient.name}</h3>
+                          <h3 className="font-bold text-zinc-900">{patient.name || 'Paciente'}</h3>
                           <p className="text-xs text-zinc-500">{patient.cpf}</p>
                         </div>
                         <ChevronRight className="h-5 w-5 text-zinc-300" />

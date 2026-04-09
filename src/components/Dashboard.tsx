@@ -149,10 +149,10 @@ export function Dashboard({ patients, appointments, treatments, dentists }: Dash
                     </div>
                   </div>
                   <div className="flex items-center">
-                    {apt.status === 'completed' && <CheckCircle2 className="h-5 w-5 text-emerald-500" />}
-                    {apt.status === 'confirmed' && <Clock className="h-5 w-5 text-blue-500" />}
-                    {apt.status === 'scheduled' && <Clock className="h-5 w-5 text-zinc-400" />}
-                    {apt.status === 'cancelled' && <XCircle className="h-5 w-5 text-red-500" />}
+                    {apt.status === 'Concluído' && <CheckCircle2 className="h-5 w-5 text-emerald-500" />}
+                    {apt.status === 'Confirmado' && <Clock className="h-5 w-5 text-blue-500" />}
+                    {apt.status === 'Agendado' && <Clock className="h-5 w-5 text-zinc-400" />}
+                    {apt.status === 'Cancelado' && <XCircle className="h-5 w-5 text-red-500" />}
                   </div>
                 </div>
               ))}

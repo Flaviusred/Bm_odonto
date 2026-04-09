@@ -1,0 +1,156 @@
+// Regras de segurança recomendadas para o projeto BM_Odonto
+// - Ajuste conforme a modelagem real dos documentos (em particular: campos `authUid`, `userId`, `patientAuthUid`, `patientEmail`).
+// - Estas regras servem como ponto de partida seguro: exigem autenticação e limitam operações sensíveis.
+// - Implemente migração para garantir que cada documento relevante contenha um campo ligado ao Firebase Auth UID
+//   (ex.: `authUid`) para permitir verificações confiáveis nas regras.
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Busca um documento em users cujo id seja igual ao auth.uid.
+    // OBS: só funcionará se houver um documento `users/{authUid}`. Se seu projeto usa ids diferentes,
+    // adapte a modelagem (recomendo salvar `authUid` dentro do documento do usuário e garantir um doc por uid).
+    function getUserRole() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+             ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+             : null;
+    }
+
+    function isStaff() {
+      let role = getUserRole();
+      return role == 'dentist' || role == 'attendant' || role == 'admin';
+    }
+
+    function isAdmin() {
+      let role = getUserRole();
+      return role == 'attendant' || role == 'admin';
+    }
+
+    // --- Notifications: acesso restrito ao proprietário ---
+    match /notifications/{notifId} {
+      // Criação: somente o usuário alvo pode criar sua própria notificação (client escreve userId=request.auth.uid)
+      allow create: if isSignedIn()
+                    && request.auth.uid == request.resource.data.userId
+                    && request.resource.data.keys().hasAll(['userId', 'message', 'type', 'createdAt']);
+
+      // Leitura: somente o usuário destino (proprietário) pode ler suas notificações
+      allow read: if isSignedIn() && request.auth.uid == resource.data.userId;
+
+      // Atualização: permitir apenas marcar como lida (campo `read`) pelo proprietário
+      allow update: if isSignedIn()
+                    && request.auth.uid == resource.data.userId
+                    && request.resource.data.keys().hasOnly(['read'])
+                    && request.resource.data.read == true;
+
+      // Não permitir exclusão pelo cliente
+      allow delete: if false;
+    }
+
+    // --- Users ---
+    match /users/{userId} {
+      // Criação: somente quando o UID de autenticação corresponde (signup/migração)
+      allow create: if isSignedIn() && (request.auth.uid == userId || request.auth.uid == request.resource.data.authUid);
+
+      // Leitura: cada usuário pode ver seu registro; staff (dentistas/atendentes) pode ver outros
+      allow read: if isSignedIn() && (request.auth.uid == userId || isStaff());
+
+      // Atualização: o próprio usuário ou staff pode atualizar
+      allow update: if isSignedIn() && (request.auth.uid == userId || isStaff());
+
+      // Exclusão: bloqueada para clientes; gerencie via backend administrativo se necessário
+      allow delete: if false;
+    }
+
+    // --- Patients (prontuários) ---
+    match /patients/{patientId} {
+      // Criação por staff
+      allow create: if isSignedIn() && isStaff();
+
+      // Leitura: staff ou o próprio paciente (quando o documento contém `authUid` ou email)
+      allow read: if isSignedIn() && (isStaff() || request.auth.uid == resource.data.authUid || request.auth.token.email == resource.data.email);
+
+      // Atualização: staff ou paciente autenticado (via `authUid`)
+      allow update: if isSignedIn() && (isStaff() || request.auth.uid == resource.data.authUid);
+
+      allow delete: if isSignedIn() && isAdmin();
+    }
+
+    // --- Dentists ---
+    match /dentists/{dentistId} {
+      allow create: if isSignedIn() && isAdmin();
+      allow read: if isSignedIn() && (isStaff() || request.auth.uid == resource.data.authUid);
+      allow update: if isSignedIn() && isAdmin();
+      allow delete: if isSignedIn() && isAdmin();
+    }
+
+    // --- Attendants ---
+    match /attendants/{attendantId} {
+      allow create, read, update, delete: if isSignedIn() && isAdmin();
+    }
+
+    // --- Appointments ---
+    // Regras conservadoras: staff tem controle; pacientes autenticados podem criar/ler/atualizar seus próprios agendamentos
+    // Para isso o documento de agendamento deve conter `patientAuthUid` ou `patientEmail` (recomendado adicionar `patientAuthUid`).
+    match /appointments/{aptId} {
+      allow create: if isSignedIn()
+                    && (isStaff() || request.auth.uid == request.resource.data.patientAuthUid || request.auth.token.email == request.resource.data.patientEmail);
+
+      allow read: if isSignedIn()
+                  && (isStaff() || request.auth.uid == resource.data.patientAuthUid || request.auth.token.email == resource.data.patientEmail);
+
+      allow update: if isSignedIn()
+                    && (isStaff() || request.auth.uid == resource.data.patientAuthUid || request.auth.token.email == resource.data.patientEmail);
+
+      allow delete: if isSignedIn() && isStaff();
+    }
+
+    // --- Treatments ---
+    match /treatments/{tId} {
+      allow create, read, update: if isSignedIn() && (isStaff() || request.auth.uid == resource.data.patientAuthUid);
+      allow delete: if isSignedIn() && isStaff();
+    }
+
+    // --- Documents (arquivos do prontuário) ---
+    match /documents/{docId} {
+      allow create: if isSignedIn() && (isStaff() || request.auth.uid == request.resource.data.patientAuthUid);
+      allow read: if isSignedIn() && (isStaff() || request.auth.uid == resource.data.patientAuthUid);
+      allow update, delete: if isSignedIn() && isStaff();
+    }
+
+    // --- Inventário, anúncios, agendas, movimentos, logs ---
+    match /inventory/{itemId} {
+      allow read, write: if isSignedIn() && isStaff();
+    }
+
+    match /announcements/{id} {
+      // Anúncios podem ser públicos para usuários autenticados ou públicos em geral dependendo da necessidade
+      allow read: if true; // se preferir proteger, troque para `isSignedIn()`
+      allow create, update, delete: if isSignedIn() && isStaff();
+    }
+
+    match /schedules/{id} { allow read, write: if isSignedIn() && isStaff(); }
+    match /movements/{id} { allow read, write: if isSignedIn() && isStaff(); }
+
+    match /audit_logs/{id} {
+      allow create: if isSignedIn() && isStaff();
+      allow read: if isSignedIn() && isStaff();
+      allow update, delete: if false;
+    }
+
+    match /settings/{id} {
+      allow read: if isSignedIn() && isStaff();
+      allow write: if isSignedIn() && isAdmin();
+    }
+
+    // --- Deny por padrão para qualquer outro caminho ---
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

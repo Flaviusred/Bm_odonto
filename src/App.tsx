@@ -28,7 +28,7 @@ import { Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
 import { emailService } from './services/emailService';
 import LoadingOverlay from './components/LoadingOverlay';
 import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
-import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField } from 'firebase/firestore';
+import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField, orderBy, getDocs } from 'firebase/firestore';
 import { sendPasswordResetEmail, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, auth, createAuthUserWithSecondaryApp } from './firebase';
 
@@ -125,14 +125,112 @@ export default function App() {
 
   const [selectedDentistId, setSelectedDentistId] = useState<string>('all');
 
-  const [notifications, setNotifications] = useState<{ id: string; message: string; type: 'info' | 'success' }[]>([]);
+  type NotificationItem = { id: string; message: string; type: 'info' | 'success'; countedForBadge?: boolean; read?: boolean; appointmentId?: string | null; createdAt?: number };
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [unseenCount, setUnseenCount] = useState(0);
+  const collectionsInitializedRef = React.useRef<Record<string, boolean>>({});
+  const [suppressInitialToasts, setSuppressInitialToasts] = useState(false);
   const dentistSeenAppointmentIdsRef = React.useRef<Set<string>>(new Set());
   const dentistNotifInitializedRef = React.useRef(false);
+  const dentistOverdueNotifMapRef = React.useRef<Record<string, string>>({});
   const [reminderSettings, setReminderSettings] = useState({
     emailReminders: true,
     reminderHoursBefore: 24
   });
+
+  // Helper: resolve a recorded authUid for a given app-level user id
+  const getAuthUidForUserId = (id: string): string | undefined => {
+    const u = users.find(x => x.id === id) as any;
+    if (u && u.authUid) return u.authUid;
+    const p = patients.find(x => x.id === id) as any;
+    if (p && p.authUid) return p.authUid;
+    return undefined;
+  };
+
+  // Notification helpers: centralize badge counting and auto-dismiss behavior.
+  const removeNotification = async (id: string) => {
+    // If this notification is persisted in Firestore, mark it as read there; otherwise just remove locally.
+    const n = notifications.find(x => x.id === id);
+    if (n && typeof n.read === 'boolean') {
+      try {
+        await updateDoc(doc(db, 'notifications', id), { read: true });
+      } catch (err) {
+        console.warn('Failed to mark notification as read in Firestore', err);
+      }
+      // local state will be updated by Firestore listener; provide immediate feedback
+      setNotifications(prev => prev.filter(x => x.id !== id));
+      if (n.countedForBadge) setUnseenCount(prev => Math.max(0, prev - 1));
+      return;
+    }
+
+    setNotifications(prev => {
+      const item = prev.find(n => n.id === id);
+      if (!item) return prev;
+      if (item.countedForBadge) {
+        setUnseenCount(prevCount => Math.max(0, prevCount - 1));
+      }
+      return prev.filter(n => n.id !== id);
+    });
+  };
+
+  const addNotification = async (notif: Omit<NotificationItem, 'countedForBadge'>, options: { autoDismiss?: boolean; ms?: number; persist?: boolean } = { autoDismiss: true, ms: 5000, persist: undefined }) => {
+    const counted = user?.role === 'dentist';
+    const firebaseUid = auth.currentUser?.uid;
+    let persist = typeof options.persist === 'boolean' ? options.persist : (user?.role === 'dentist');
+
+    // Only attempt Firestore persistence when there's a signed-in Firebase Auth user.
+    if (persist && !firebaseUid) {
+      console.warn('Skipping Firestore persist: no Firebase Auth user available.');
+      persist = false;
+    }
+
+    const id = notif.id || Math.random().toString(36).substr(2, 9);
+
+    if (persist && firebaseUid) {
+      try {
+        const payload: any = {
+          userId: firebaseUid,
+          message: notif.message,
+          type: notif.type,
+          appointmentId: (notif as any).appointmentId || null,
+          read: false,
+          createdAt: notif.createdAt || Date.now()
+        };
+        await setDoc(doc(db, 'notifications', id), payload);
+
+        // If this is the initial mount for dentist, increment badge but avoid toasts
+        if (initialMountRef.current && user?.role === 'dentist') {
+          setUnseenCount(prev => prev + 1);
+          return;
+        }
+
+        // Add immediate local feedback; Firestore listener will keep state in sync.
+        setNotifications(prev => [...prev, { id, message: notif.message, type: notif.type, countedForBadge: counted, read: false, appointmentId: (notif as any).appointmentId || null, createdAt: payload.createdAt }]);
+        if (counted) setUnseenCount(prev => prev + 1);
+
+        if (options.autoDismiss) {
+          setTimeout(() => removeNotification(id), options.ms);
+        }
+        return;
+      } catch (err) {
+        console.warn('Failed to persist notification to Firestore, falling back to local', err);
+      }
+    }
+
+    const item: NotificationItem = { id, ...notif, countedForBadge: counted };
+
+    // Suppress toast popups during the first app mount (login) for dentists — keep the badge count but avoid flooding the screen with toasts.
+    if (initialMountRef.current && user?.role === 'dentist') {
+      if (counted) setUnseenCount(prev => prev + 1);
+      return;
+    }
+
+    setNotifications(prev => [...prev, item]);
+    if (counted) setUnseenCount(prev => prev + 1);
+    if (options.autoDismiss) {
+      setTimeout(() => removeNotification(item.id), options.ms);
+    }
+  };
 
   // Firestore Real-time Sync
   useEffect(() => {
@@ -155,6 +253,7 @@ export default function App() {
       return onSnapshot(collection(db, name), (snapshot) => {
         const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as any));
         setter(data);
+        try { collectionsInitializedRef.current[name] = true; } catch (e) {}
       }, (error) => {
         handleFirestoreError(error, OperationType.LIST, name);
       });
@@ -547,9 +646,7 @@ export default function App() {
 
     try {
       await runWithLoading(async () => {
-        await setDoc(doc(db, 'patients', id), newPatient);
-
-        // Criar usuário correspondente para o portal do paciente
+        // If provided, create an auth user first so we can store authUid on the patient record.
         const patientPassword = (data as any).password as string | undefined;
         const hasEmail = !!(newPatient.email && newPatient.email.trim());
         let authUid: string | undefined;
@@ -557,6 +654,10 @@ export default function App() {
         if (hasEmail && patientPassword && patientPassword.length >= 6) {
           authUid = await createAuthUserWithSecondaryApp(newPatient.email.trim().toLowerCase(), patientPassword);
         }
+
+        // include authUid on patient document when available
+        const patientWithAuth: any = { ...newPatient, ...(authUid ? { authUid } : {}) };
+        await setDoc(doc(db, 'patients', id), patientWithAuth);
 
         const newUser: User & { authUid?: string } = {
           id,
@@ -634,7 +735,8 @@ export default function App() {
       ...(stripPassword(data as any) as Omit<Dentist, 'id' | 'createdAt' | 'isActive'>),
       id,
       createdAt: new Date().toISOString(),
-      isActive: true
+      isActive: true,
+      ...(authUid ? { authUid } : {})
     };
     try {
       await setDoc(doc(db, 'dentists', id), newDentist);
@@ -716,7 +818,8 @@ export default function App() {
       ...(stripPassword(data as any) as Omit<Attendant, 'id' | 'createdAt' | 'isActive'>),
       id,
       createdAt: new Date().toISOString(),
-      isActive: true
+      isActive: true,
+      ...(authUid ? { authUid } : {})
     };
     try {
       await setDoc(doc(db, 'attendants', id), newAttendant);
@@ -775,7 +878,12 @@ export default function App() {
   };
 
   // Appointment Handlers
+  const initialMountRef = React.useRef(true);
   useEffect(() => {
+    if (initialMountRef.current) {
+      initialMountRef.current = false;
+      return;
+    }
     if (user?.role === 'dentist' && activeTab === 'dentist-appointments') {
       setUnseenCount(0);
     }
@@ -793,6 +901,10 @@ export default function App() {
     const currentIds = new Set(myAppointments.map(a => a.id));
 
     if (!dentistNotifInitializedRef.current) {
+      // Only initialize seen IDs after we have received the initial appointments snapshot
+      if (!collectionsInitializedRef.current['appointments']) {
+        return;
+      }
       dentistSeenAppointmentIdsRef.current = currentIds;
       dentistNotifInitializedRef.current = true;
       return;
@@ -809,20 +921,137 @@ export default function App() {
         };
       });
 
-      setNotifications(prev => [...prev, ...newNotifs]);
-      if (activeTab !== 'dentist-appointments') {
-        setUnseenCount(prev => prev + newNotifs.length);
-      }
-
-      newNotifs.forEach((notif) => {
-        setTimeout(() => {
-          setNotifications(prev => prev.filter(n => n.id !== notif.id));
-        }, 5000);
-      });
+      newNotifs.forEach((notif) => addNotification(notif));
     }
 
     dentistSeenAppointmentIdsRef.current = currentIds;
   }, [appointments, patients, user, activeTab]);
+
+  // Notify dentist of overdue / not-finalized appointments (past date, not completed/cancelled).
+  useEffect(() => {
+    if (user?.role !== 'dentist') return;
+
+    const myAppointments = appointments.filter(a => a.dentistId === user.id);
+    const now = new Date();
+
+    // Add notifications for overdue appointments
+    myAppointments.forEach(apt => {
+      if (!apt || !apt.id) return;
+      if (apt.status === 'completed' || apt.status === 'cancelled') {
+        return;
+      }
+      // build appointment DateTime
+      try {
+        const appDate = new Date(`${apt.date}T${apt.time}`);
+        if (isNaN(appDate.getTime())) return;
+
+        if (appDate < now) {
+          // overdue and not yet notified
+          if (!dentistOverdueNotifMapRef.current[apt.id] && !notifications.some(n => n.appointmentId === apt.id)) {
+            const patientName = patients.find(p => p.id === apt.patientId)?.name || 'Paciente';
+            const notif = {
+              id: `overdue-${apt.id}-${Math.random().toString(36).substr(2,6)}`,
+              message: `Agendamento não finalizado: ${patientName} em ${parseDate(apt.date).toLocaleDateString('pt-BR')} às ${apt.time}`,
+              type: 'info' as const
+            };
+            // persistent notification until dentist marks as completed/cancelled
+            addNotification(notif, { autoDismiss: false });
+            dentistOverdueNotifMapRef.current[apt.id] = notif.id;
+          }
+        }
+      } catch (e) {
+        // ignore parse errors
+      }
+    });
+
+    // Cleanup: remove notifications when appointment is completed/cancelled or removed
+    Object.keys(dentistOverdueNotifMapRef.current).forEach(aptId => {
+      const apt = appointments.find(a => a.id === aptId);
+      if (!apt || apt.status === 'completed' || apt.status === 'cancelled') {
+        const notifId = dentistOverdueNotifMapRef.current[aptId];
+        if (notifId) removeNotification(notifId);
+        delete dentistOverdueNotifMapRef.current[aptId];
+      }
+    });
+  }, [appointments, patients, user, notifications]);
+
+  // Firestore-backed notifications subscription for current user
+  useEffect(() => {
+    if (!user) {
+      setNotifications([]);
+      setUnseenCount(0);
+      return;
+    }
+
+    // Only subscribe when there's an authenticated Firebase user — otherwise the onSnapshot will fail with permission errors.
+    const firebaseUid = auth.currentUser?.uid;
+    if (!firebaseUid) {
+      console.warn('Skipping notifications subscription: no Firebase Auth user.');
+      setNotifications([]);
+      setUnseenCount(0);
+      setSuppressInitialToasts(false);
+      return;
+    }
+
+    try {
+      // start by suppressing initial toasts for dentists to avoid flood on login
+      if (user.role === 'dentist') setSuppressInitialToasts(true);
+
+      const q = query(collection(db, 'notifications'), where('userId', '==', firebaseUid), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(q, (snapshot) => {
+        const docs = snapshot.docs.map(d => {
+          const data: any = d.data();
+          return {
+            id: d.id,
+            message: data.message,
+            type: data.type,
+            read: !!data.read,
+            appointmentId: data.appointmentId || null,
+            countedForBadge: !data.read,
+            createdAt: data.createdAt || 0
+          } as NotificationItem;
+        });
+        setNotifications(docs);
+        setUnseenCount(docs.filter(x => !x.read).length);
+
+        // after initial snapshot, allow toasts to appear for new notifications
+        if (user.role === 'dentist') {
+          setTimeout(() => setSuppressInitialToasts(false), 800);
+        } else {
+          setSuppressInitialToasts(false);
+        }
+      }, (err) => {
+        console.warn('notifications snapshot error', err);
+      });
+
+      return () => {
+        unsub();
+        setSuppressInitialToasts(false);
+      };
+    } catch (e) {
+      console.warn('Failed to subscribe to notifications', e);
+    }
+  }, [user]);
+
+  const markAllNotificationsRead = async () => {
+    if (!user) return;
+    const firebaseUid = auth.currentUser?.uid;
+    if (!firebaseUid) {
+      // If not authenticated with Firebase Auth, mark local state as read and clear unseen count.
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+      setUnseenCount(0);
+      return;
+    }
+
+    try {
+      const q = query(collection(db, 'notifications'), where('userId', '==', firebaseUid), where('read', '==', false));
+      const snap = await getDocs(q);
+      await Promise.all(snap.docs.map(d => updateDoc(doc(db, 'notifications', d.id), { read: true })));
+      setUnseenCount(0);
+    } catch (err) {
+      console.warn('Failed to mark all notifications read', err);
+    }
+  };
 
   const addAppointment = async (data: Omit<Appointment, 'id' | 'createdAt'>) => {
     // Conflict detection
@@ -839,18 +1068,20 @@ export default function App() {
         message: `Conflito de horário: Este dentista já possui um agendamento para este horário.`,
         type: 'info' as const
       };
-      setNotifications(prev => [...prev, newNotification]);
-      setTimeout(() => {
-        setNotifications(prev => prev.filter(n => n.id !== newNotification.id));
-      }, 5000);
+      addNotification(newNotification);
       return;
     }
 
     const id = Math.random().toString(36).substr(2, 9);
+    const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
+    const dentistAuthUid = getAuthUidForUserId(data.dentistId) || null;
+
     const newApt: Appointment = {
       ...data,
       id,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      patientAuthUid,
+      dentistAuthUid
     };
     
     try {
@@ -869,22 +1100,19 @@ export default function App() {
           if (titular?.email && String(titular.email).trim() !== '') notifyEmail = titular.email;
         }
 
-        if (notifyEmail) {
-          emailService.sendAppointmentEmail(
-            notifyEmail,
-            'Confirmação de Agendamento',
-            `Olá ${patient.name}, seu agendamento foi confirmado para ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}.\nDentista: ${dentistName}`
-          );
-        } else {
-          const newNotification = {
-            id: Math.random().toString(36).substr(2, 9),
-            message: `Paciente ${patient.name} não possui e-mail cadastrado — confirmação não enviada.`,
-            type: 'info' as const
-          };
-          setNotifications(prev => [...prev, newNotification]);
-          setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== newNotification.id)), 5000);
-        }
+                    if (patientEmail) {
+                      try {
+                        emailService.sendAppointmentEmail(patientEmail, subject, details);
+                      } catch (e) {
+                        console.error('Falha ao enviar e-mail de cancelamento', e);
+                      }
+                    } else {
+                      const noEmailNotif = { id: Math.random().toString(36).substr(2,9), message: `Paciente não possui e-mail cadastrado — notificação de cancelamento não enviada.`, type: 'info' as const };
+                      addNotification(noEmailNotif);
+                    }
 
+                  const notif = { id: Math.random().toString(36).substr(2,9), message: 'Agendamento cancelado.', type: 'info' as const };
+                  addNotification(notif);
         // Mostrar confirmação na tela do paciente quando o agendamento for criado por ele
         if (user?.role === 'patient' && user.id === data.patientId) {
           const patientNotif = {
@@ -892,8 +1120,7 @@ export default function App() {
             message: `Agendamento confirmado para ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}.`,
             type: 'success' as const
           };
-          setNotifications(prev => [...prev, patientNotif]);
-          setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== patientNotif.id)), 5000);
+          addNotification(patientNotif);
         }
       }
 
@@ -933,7 +1160,9 @@ export default function App() {
 
   const updateAppointment = async (updatedAppointment: Appointment) => {
     try {
-      await setDoc(doc(db, 'appointments', updatedAppointment.id), updatedAppointment, { merge: true });
+      const patientAuthUid = updatedAppointment.patientAuthUid || getAuthUidForUserId(updatedAppointment.patientId) || null;
+      const dentistAuthUid = updatedAppointment.dentistAuthUid || getAuthUidForUserId(updatedAppointment.dentistId) || null;
+      await setDoc(doc(db, 'appointments', updatedAppointment.id), { ...updatedAppointment, patientAuthUid, dentistAuthUid }, { merge: true });
       logAction('Edição', 'appointment', updatedAppointment.id, `Agendamento para ${parseDate(updatedAppointment.date).toLocaleDateString('pt-BR')} às ${updatedAppointment.time} atualizado.`);
       
       // Email notification
@@ -984,10 +1213,12 @@ export default function App() {
   // Treatment Handlers
   const addTreatment = async (data: Omit<Treatment, 'id' | 'createdAt'>) => {
     const id = Math.random().toString(36).substr(2, 9);
+    const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
     const newTreatment: Treatment = {
       ...data,
       id,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      patientAuthUid
     };
     try {
       await setDoc(doc(db, 'treatments', id), newTreatment);
@@ -999,7 +1230,8 @@ export default function App() {
 
   const updateTreatment = async (updatedTreatment: Treatment) => {
     try {
-      await setDoc(doc(db, 'treatments', updatedTreatment.id), updatedTreatment, { merge: true });
+      const patientAuthUid = updatedTreatment.patientAuthUid || getAuthUidForUserId(updatedTreatment.patientId) || null;
+      await setDoc(doc(db, 'treatments', updatedTreatment.id), { ...updatedTreatment, patientAuthUid }, { merge: true });
       logAction('Edição', 'treatment', updatedTreatment.id, `Tratamento ${updatedTreatment.description} atualizado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `treatments/${updatedTreatment.id}`);
@@ -1008,10 +1240,12 @@ export default function App() {
 
   const addDocument = async (data: Omit<PatientDocument, 'id' | 'uploadedAt'>) => {
     const id = Math.random().toString(36).substr(2, 9);
+    const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
     const newDoc: PatientDocument = {
       ...data,
       id,
-      uploadedAt: new Date().toISOString()
+      uploadedAt: new Date().toISOString(),
+      patientAuthUid
     };
     try {
       await setDoc(doc(db, 'documents', id), newDoc);
@@ -1325,7 +1559,7 @@ export default function App() {
 
       {/* Toast Notifications */}
       <div className="fixed top-4 right-4 z-[100] space-y-2 pointer-events-none">
-        {notifications.map(n => (
+        {!suppressInitialToasts && notifications.map(n => (
           <div 
             key={n.id} 
             className="pointer-events-auto flex items-center gap-3 bg-white border border-emerald-100 shadow-xl rounded-2xl p-4 min-w-[320px] animate-in slide-in-from-right duration-300"
@@ -1338,7 +1572,7 @@ export default function App() {
               <p className="text-xs text-zinc-500">{n.message}</p>
             </div>
             <button 
-              onClick={() => setNotifications(prev => prev.filter(notif => notif.id !== n.id))}
+              onClick={() => removeNotification(n.id)}
               className="text-zinc-400 hover:text-zinc-600"
             >
               <XCircle className="h-4 w-4" />
@@ -1363,12 +1597,10 @@ export default function App() {
                 try {
                   await updateAppointmentStatus(id, 'confirmed');
                   const notif = { id: Math.random().toString(36).substr(2,9), message: 'Agendamento confirmado com sucesso.', type: 'success' as const };
-                  setNotifications(prev => [...prev, notif]);
-                  setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== notif.id)), 5000);
+                  addNotification(notif);
                 } catch (err) {
                   const notif = { id: Math.random().toString(36).substr(2,9), message: 'Falha ao confirmar agendamento.', type: 'info' as const };
-                  setNotifications(prev => [...prev, notif]);
-                  setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== notif.id)), 5000);
+                  addNotification(notif);
                   console.error('Confirm appointment error', err);
                 }
               }}
@@ -1401,18 +1633,15 @@ export default function App() {
                       }
                     } else {
                       const noEmailNotif = { id: Math.random().toString(36).substr(2,9), message: `Paciente não possui e-mail cadastrado — notificação de cancelamento não enviada.`, type: 'info' as const };
-                      setNotifications(prev => [...prev, noEmailNotif]);
-                      setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== noEmailNotif.id)), 5000);
+                      addNotification(noEmailNotif);
                     }
                   }
 
                   const notif = { id: Math.random().toString(36).substr(2,9), message: 'Agendamento cancelado.', type: 'info' as const };
-                  setNotifications(prev => [...prev, notif]);
-                  setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== notif.id)), 5000);
+                  addNotification(notif);
                 } catch (err) {
                   const notif = { id: Math.random().toString(36).substr(2,9), message: 'Falha ao cancelar agendamento.', type: 'info' as const };
-                  setNotifications(prev => [...prev, notif]);
-                  setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== notif.id)), 5000);
+                  addNotification(notif);
                   console.error('Cancel appointment error', err);
                 }
               }}
@@ -1432,8 +1661,9 @@ export default function App() {
               onUpdateTreatment={updateTreatment}
               onAddDocument={addDocument}
               onUpdateAppointmentStatus={updateAppointmentStatus}
-              notifications={notifications}
-              setNotifications={setNotifications}
+              unseenCount={unseenCount}
+              setUnseenCount={setUnseenCount}
+              markAllNotificationsRead={markAllNotificationsRead}
             />
           ) : (
             <>
