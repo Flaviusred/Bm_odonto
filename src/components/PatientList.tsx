@@ -88,29 +88,38 @@ function PatientListContent({
       const existingTitular = patients.find(p => p.cpf === titular.cpf);
       const titularId = existingTitular ? existingTitular.id : (titular.id || Math.random().toString(36).substr(2, 9));
       
-      // Adicionar titular se não existir
-      if (!existingTitular) {
-        onAddPatient({ 
-          ...titular, 
-          id: titularId,
-          patientType: 'cbmpb' 
-        } as any);
-      }
-      
-      // Adicionar dependentes vinculados ao titularId
-      dependentes.forEach(dep => {
-        const existingDep = patients.find(p => 
-          p.dependentOf === titularId && 
-          (p.name === dep.name || (dep.cpf && p.cpf === dep.cpf))
-        );
-        if (!existingDep) {
-          onAddPatient({ 
-            ...dep, 
-            patientType: 'cbmpb',
-            dependentOf: titularId 
-          } as any);
+      // Adicionar titular se não existir (aguarda a operação quando possível)
+      try {
+        if (!existingTitular) {
+          await Promise.resolve(onAddPatient({ 
+            ...titular, 
+            id: titularId,
+            patientType: 'cbmpb'
+          } as any));
         }
-      });
+
+        // Adicionar dependentes vinculados ao titularId (aguarda todas as gravações)
+        const depPromises: Promise<any>[] = [];
+        for (const dep of dependentes) {
+          const existingDep = patients.find(p => 
+            p.dependentOf === titularId && 
+            (p.name === dep.name || (dep.cpf && p.cpf === dep.cpf))
+          );
+          if (!existingDep) {
+            depPromises.push(Promise.resolve(onAddPatient({ 
+              ...dep, 
+              patientType: 'cbmpb',
+              dependentOf: titularId 
+            } as any)));
+          }
+        }
+        if (depPromises.length > 0) await Promise.all(depPromises);
+      } catch (err) {
+        alert('Erro ao salvar pacientes importados: ' + (err instanceof Error ? err.message : String(err)));
+        setIsSearching(false);
+        setIsConfirmImportOpen(false);
+        return;
+      }
       
       // Abrir modal de dependentes se houver dependentes
       if (dependentes.length > 0) {

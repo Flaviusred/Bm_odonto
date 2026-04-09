@@ -10,7 +10,9 @@
     "deploy:test": "npm run build && npm run start",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "cleanup:empty-users:dry": "tsx scripts/cleanup-empty-user-docs.ts",
+    "cleanup:empty-users:apply": "tsx scripts/cleanup-empty-user-docs.ts --apply"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

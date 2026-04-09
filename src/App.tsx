@@ -125,11 +125,15 @@ export default function App() {
 
   const [selectedDentistId, setSelectedDentistId] = useState<string>('all');
 
-  type NotificationItem = { id: string; message: string; type: 'info' | 'success'; countedForBadge?: boolean; read?: boolean; appointmentId?: string | null; createdAt?: number };
+  type NotificationItem = { id: string; message: string; type: 'info' | 'success'; countedForBadge?: boolean; read?: boolean; appointmentId?: string | null; createdAt?: number; showAsToast?: boolean };
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [unseenCount, setUnseenCount] = useState(0);
   const collectionsInitializedRef = React.useRef<Record<string, boolean>>({});
   const [suppressInitialToasts, setSuppressInitialToasts] = useState(false);
+  // cache initial persisted notifications to avoid showing a flood of toasts on login
+  const notificationsCacheRef = React.useRef<NotificationItem[]>([]);
+  const notificationsInitializedRef = React.useRef(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const dentistSeenAppointmentIdsRef = React.useRef<Set<string>>(new Set());
   const dentistNotifInitializedRef = React.useRef(false);
   const dentistOverdueNotifMapRef = React.useRef<Record<string, string>>({});
@@ -205,7 +209,7 @@ export default function App() {
         }
 
         // Add immediate local feedback; Firestore listener will keep state in sync.
-        setNotifications(prev => [...prev, { id, message: notif.message, type: notif.type, countedForBadge: counted, read: false, appointmentId: (notif as any).appointmentId || null, createdAt: payload.createdAt }]);
+        setNotifications(prev => [...prev, { id, message: notif.message, type: notif.type, countedForBadge: counted, read: false, appointmentId: (notif as any).appointmentId || null, createdAt: payload.createdAt, showAsToast: true }]);
         if (counted) setUnseenCount(prev => prev + 1);
 
         if (options.autoDismiss) {
@@ -217,7 +221,7 @@ export default function App() {
       }
     }
 
-    const item: NotificationItem = { id, ...notif, countedForBadge: counted };
+    const item: NotificationItem = { id, ...notif, countedForBadge: counted, showAsToast: true };
 
     // Suppress toast popups during the first app mount (login) for dentists — keep the badge count but avoid flooding the screen with toasts.
     if (initialMountRef.current && user?.role === 'dentist') {
@@ -230,6 +234,26 @@ export default function App() {
     if (options.autoDismiss) {
       setTimeout(() => removeNotification(item.id), options.ms);
     }
+  };
+
+  const toggleNotificationsPanel = () => {
+    setIsNotificationsOpen(prev => {
+      const next = !prev;
+      if (next) {
+        // Opening: merge cached persisted notifications with current state without showing toasts
+        setNotifications(current => {
+          const cached = notificationsCacheRef.current.map(n => ({ ...n, showAsToast: false }));
+          const combined = [...cached, ...current.map(n => ({ ...n, showAsToast: false }))];
+          // dedupe by id
+          const map = new Map<string, NotificationItem>();
+          combined.forEach(n => map.set(n.id, n));
+          const result = Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          return result;
+        });
+        notificationsCacheRef.current = [];
+      }
+      return next;
+    });
   };
 
   // Firestore Real-time Sync
@@ -290,10 +314,11 @@ export default function App() {
   };
 
   const clearLegacyPasswords = async (id: string) => {
-    await setDoc(doc(db, 'users', id), { password: deleteField() }, { merge: true });
-    await setDoc(doc(db, 'patients', id), { password: deleteField() }, { merge: true }).catch(() => {});
-    await setDoc(doc(db, 'dentists', id), { password: deleteField() }, { merge: true }).catch(() => {});
-    await setDoc(doc(db, 'attendants', id), { password: deleteField() }, { merge: true }).catch(() => {});
+    // updateDoc evita criar documentos vazios quando o doc não existe.
+    await updateDoc(doc(db, 'users', id), { password: deleteField() }).catch(() => {});
+    await updateDoc(doc(db, 'patients', id), { password: deleteField() }).catch(() => {});
+    await updateDoc(doc(db, 'dentists', id), { password: deleteField() }).catch(() => {});
+    await updateDoc(doc(db, 'attendants', id), { password: deleteField() }).catch(() => {});
   };
 
   // Persistence
@@ -659,16 +684,20 @@ export default function App() {
         const patientWithAuth: any = { ...newPatient, ...(authUid ? { authUid } : {}) };
         await setDoc(doc(db, 'patients', id), patientWithAuth);
 
-        const newUser: User & { authUid?: string } = {
-          id,
-          name: newPatient.name,
-          email: newPatient.email,
-          role: 'patient',
-          permissions: ['patient-profile'],
-          phone: newPatient.phone,
-          ...(authUid ? { authUid } : {})
-        };
-        await setDoc(doc(db, 'users', id), newUser);
+        // Only create a corresponding `users` document for titulars (not for dependents)
+        // This keeps the `users` collection contendo apenas os titulares.
+        if (!newPatient.dependentOf) {
+          const newUser: User & { authUid?: string } = {
+            id,
+            name: newPatient.name,
+            email: newPatient.email,
+            role: 'patient',
+            permissions: ['patient-profile'],
+            phone: newPatient.phone,
+            ...(authUid ? { authUid } : {})
+          };
+          await setDoc(doc(db, 'users', id), newUser);
+        }
       });
 
       logAction('Criação', 'patient', newPatient.id, `Paciente ${newPatient.name} criado.`);
@@ -992,6 +1021,8 @@ export default function App() {
       setSuppressInitialToasts(false);
       return;
     }
+    // Reset initialization marker so per-user initial snapshot is cached.
+    notificationsInitializedRef.current = false;
 
     try {
       // start by suppressing initial toasts for dentists to avoid flood on login
@@ -1011,15 +1042,48 @@ export default function App() {
             createdAt: data.createdAt || 0
           } as NotificationItem;
         });
-        setNotifications(docs);
-        setUnseenCount(docs.filter(x => !x.read).length);
 
-        // after initial snapshot, allow toasts to appear for new notifications
-        if (user.role === 'dentist') {
-          setTimeout(() => setSuppressInitialToasts(false), 800);
-        } else {
-          setSuppressInitialToasts(false);
+        // First snapshot: cache persisted notifications and avoid showing toasts immediately.
+        if (!notificationsInitializedRef.current) {
+          notificationsInitializedRef.current = true;
+          notificationsCacheRef.current = docs.map(d => ({ ...d, showAsToast: false }));
+          setUnseenCount(docs.filter(x => !x.read).length);
+          if (user.role === 'dentist') setSuppressInitialToasts(true);
+          if (user.role === 'dentist') {
+            setTimeout(() => setSuppressInitialToasts(false), 800);
+          } else {
+            setSuppressInitialToasts(false);
+          }
+          return;
         }
+
+        // Subsequent snapshots: apply only incremental changes to avoid re-triggering toasts for cached items.
+        snapshot.docChanges().forEach(change => {
+          const d = change.doc;
+          const data: any = d.data();
+          const item: NotificationItem = {
+            id: d.id,
+            message: data.message,
+            type: data.type,
+            read: !!data.read,
+            appointmentId: data.appointmentId || null,
+            countedForBadge: !data.read,
+            createdAt: data.createdAt || 0,
+            showAsToast: true
+          };
+
+          if (change.type === 'added') {
+            setNotifications(prev => {
+              if (prev.some(n => n.id === item.id)) return prev;
+              return [...prev, { ...item, showAsToast: true }];
+            });
+            if (!item.read) setUnseenCount(prev => prev + 1);
+          } else if (change.type === 'modified') {
+            setNotifications(prev => prev.map(n => n.id === item.id ? { ...n, ...item, showAsToast: false } : n));
+          } else if (change.type === 'removed') {
+            setNotifications(prev => prev.filter(n => n.id !== item.id));
+          }
+        });
       }, (err) => {
         console.warn('notifications snapshot error', err);
       });
@@ -1100,19 +1164,23 @@ export default function App() {
           if (titular?.email && String(titular.email).trim() !== '') notifyEmail = titular.email;
         }
 
-                    if (patientEmail) {
-                      try {
-                        emailService.sendAppointmentEmail(patientEmail, subject, details);
-                      } catch (e) {
-                        console.error('Falha ao enviar e-mail de cancelamento', e);
-                      }
-                    } else {
-                      const noEmailNotif = { id: Math.random().toString(36).substr(2,9), message: `Paciente não possui e-mail cadastrado — notificação de cancelamento não enviada.`, type: 'info' as const };
-                      addNotification(noEmailNotif);
-                    }
+        if (notifyEmail) {
+          try {
+            emailService.sendAppointmentEmail(
+              notifyEmail,
+              'Novo Agendamento',
+              `Olá ${patient.name}, seu agendamento foi marcado para ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}.\nDentista: ${dentistName}`
+            );
+          } catch (e) {
+            console.error('Falha ao enviar e-mail de agendamento', e);
+          }
+        } else {
+          const noEmailNotif = { id: Math.random().toString(36).substr(2,9), message: `Paciente não possui e-mail cadastrado — notificação por e-mail não enviada.`, type: 'info' as const };
+          addNotification(noEmailNotif);
+        }
 
-                  const notif = { id: Math.random().toString(36).substr(2,9), message: 'Agendamento cancelado.', type: 'info' as const };
-                  addNotification(notif);
+        const notif = { id: Math.random().toString(36).substr(2,9), message: 'Agendamento criado.', type: 'success' as const };
+        addNotification(notif);
         // Mostrar confirmação na tela do paciente quando o agendamento for criado por ele
         if (user?.role === 'patient' && user.id === data.patientId) {
           const patientNotif = {
@@ -1559,7 +1627,7 @@ export default function App() {
 
       {/* Toast Notifications */}
       <div className="fixed top-4 right-4 z-[100] space-y-2 pointer-events-none">
-        {!suppressInitialToasts && notifications.map(n => (
+        {!suppressInitialToasts && notifications.filter(n => n.showAsToast).map(n => (
           <div 
             key={n.id} 
             className="pointer-events-auto flex items-center gap-3 bg-white border border-emerald-100 shadow-xl rounded-2xl p-4 min-w-[320px] animate-in slide-in-from-right duration-300"
@@ -1664,6 +1732,10 @@ export default function App() {
               unseenCount={unseenCount}
               setUnseenCount={setUnseenCount}
               markAllNotificationsRead={markAllNotificationsRead}
+              notifications={notifications}
+              isNotificationsOpen={isNotificationsOpen}
+              toggleNotificationsPanel={toggleNotificationsPanel}
+              removeNotification={removeNotification}
             />
           ) : (
             <>

@@ -45,6 +45,10 @@ interface DentistPortalProps {
   unseenCount: number;
   setUnseenCount: React.Dispatch<React.SetStateAction<number>>;
   markAllNotificationsRead?: () => Promise<void> | (() => void);
+  notifications?: Array<{ id: string; message: string; type: 'info' | 'success'; read?: boolean; appointmentId?: string | null; createdAt?: number; showAsToast?: boolean }>;
+  isNotificationsOpen?: boolean;
+  toggleNotificationsPanel?: () => void;
+  removeNotification?: (id: string) => void;
 }
 
 export function DentistPortal({ 
@@ -62,7 +66,11 @@ export function DentistPortal({
   onAddDocument,
   onUpdateAppointmentStatus,
   unseenCount, setUnseenCount,
-  markAllNotificationsRead
+  markAllNotificationsRead,
+  notifications,
+  isNotificationsOpen,
+  toggleNotificationsPanel,
+  removeNotification
 }: DentistPortalProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
@@ -259,7 +267,7 @@ export function DentistPortal({
   const getPatientName = (id: string) => patients.find(p => p.id === id)?.name || 'Paciente';
   const getDentistName = (id: string) => dentists.find(d => d.id === id)?.name || 'Dentista';
 
-  const statusClass: Record<Appointment['status'], string> = {
+  const statusClass: Partial<Record<Appointment['status'], string>> = {
     scheduled: 'bg-zinc-100 text-zinc-700 border-zinc-200',
     confirmed: 'bg-blue-100 text-blue-700 border-blue-200',
     cancelled: 'bg-red-100 text-red-700 border-red-200',
@@ -267,7 +275,7 @@ export function DentistPortal({
     blocked: 'bg-amber-100 text-amber-700 border-amber-200',
   };
 
-  const statusLabel: Record<Appointment['status'], string> = {
+  const statusLabel: Partial<Record<Appointment['status'], string>> = {
     scheduled: 'Agendado',
     confirmed: 'Confirmado',
     cancelled: 'Cancelado',
@@ -363,12 +371,46 @@ export function DentistPortal({
     <div className="flex flex-col h-full">
       <header className="flex items-center justify-between p-4 bg-white border-b border-zinc-200">
         <h1 className="text-xl font-bold">Portal do Dentista</h1>
-        <div className="relative cursor-pointer" onClick={() => { markAllNotificationsRead?.(); setUnseenCount(0); }}>
-          <Bell className="h-6 w-6 text-zinc-600" />
-          {(unseenCount > 0) && (
-            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
-              {unseenCount}
-            </span>
+        <div className="relative">
+          <button className="relative" onClick={() => toggleNotificationsPanel?.() } aria-label="Notificações">
+            <Bell className="h-6 w-6 text-zinc-600" />
+            {(unseenCount > 0) && (
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
+                {unseenCount}
+              </span>
+            )}
+          </button>
+
+          {/** Panel */}
+          {isNotificationsOpen && (
+            <div className="absolute right-0 mt-2 w-96 max-h-96 overflow-auto bg-white rounded-lg shadow-lg border p-2 z-30">
+              <div className="flex items-center justify-between px-2 py-1 border-b">
+                <div className="font-bold">Notificações</div>
+                <div className="flex items-center gap-2">
+                  <button className="text-xs text-zinc-500 hover:text-zinc-700" onClick={async () => { await markAllNotificationsRead?.(); setUnseenCount(0); }}>Marcar todas como lidas</button>
+                </div>
+              </div>
+              <div className="divide-y">
+                {notifications && notifications.length > 0 ? (
+                  notifications.slice().sort((a,b) => (b.createdAt||0) - (a.createdAt||0)).map(n => (
+                    <div key={n.id} className="px-3 py-2 flex items-start gap-3">
+                      <div className="h-8 w-8 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600">
+                        <Calendar className="h-4 w-4" />
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-zinc-900">{n.message}</div>
+                        <div className="text-xs text-zinc-400">{n.createdAt ? new Date(n.createdAt).toLocaleString('pt-BR') : ''}</div>
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        <button className="text-xs text-zinc-500 hover:text-zinc-800" onClick={() => removeNotification?.(n.id)}>Marcar como lida</button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="p-3 text-center text-sm text-zinc-500">Sem notificações</div>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </header>

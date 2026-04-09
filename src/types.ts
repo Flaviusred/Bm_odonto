@@ -71,7 +71,18 @@ export interface Appointment {
   dentistId: string;
   date: string;
   time: string;
-  status: 'Agendado' | 'Confirmado' | 'Cancelado' | 'Concluído' | 'Bloqueado';
+  // Aceita formas em Português e Inglês para compatibilidade com diferentes partes da UI
+  status:
+    | 'Agendado'
+    | 'Confirmado'
+    | 'Cancelado'
+    | 'Concluído'
+    | 'Bloqueado'
+    | 'scheduled'
+    | 'confirmed'
+    | 'cancelled'
+    | 'completed'
+    | 'blocked';
   notes?: string;
   createdAt: string;
   googleEventId?: string;
@@ -115,7 +126,8 @@ export interface InventoryMovement {
   id: string;
   itemId: string;
   itemName: string;
-  type: 'entrada' | 'saida';
+  // Aceita 'entrada'/'saida' (português) e 'in'/'out' (inglês)
+  type: 'entrada' | 'saida' | 'in' | 'out';
   quantity: number;
   reason: string;
   date: string;
