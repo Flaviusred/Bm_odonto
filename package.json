@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
+    "prestart": "npm run build",
     "build": "vite build",
     "start": "cross-env NODE_ENV=production tsx server.ts",
     "deploy:test": "npm run build && npm run start",

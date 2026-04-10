@@ -6,7 +6,16 @@ import { deleteApp } from 'firebase/app';
 import firebaseConfig from '../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+const configuredDatabaseId = (firebaseConfig as any).firestoreDatabaseId as string | undefined;
+const normalizedDatabaseId = configuredDatabaseId?.trim();
+const useNamedDatabase = Boolean(
+	normalizedDatabaseId &&
+	normalizedDatabaseId !== '(default)' &&
+	!normalizedDatabaseId.startsWith('ai-studio-')
+);
+
+// Fallback to default database when config carries transient AI Studio DB ids.
+export const db = useNamedDatabase ? getFirestore(app, normalizedDatabaseId) : getFirestore(app);
 export const  auth = getAuth(app);
 
 // Cria usuário no Firebase Auth sem alterar a sessão autenticada do app principal.
