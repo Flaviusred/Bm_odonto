@@ -41,46 +41,11 @@ enum OperationType {
   WRITE = 'write',
 }
 
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
-}
-
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  // Log detalhado apenas no console do servidor/dev, sem expor info sensível para a UI
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`Firestore Error [${operationType}] at ${path}:`, message);
+  throw new Error(`Erro ao acessar dados (${operationType}: ${path}). Tente novamente.`);
 }
 
 export default function App() {
@@ -188,7 +153,7 @@ export default function App() {
       persist = false;
     }
 
-    const id = notif.id || Math.random().toString(36).substr(2, 9);
+    const id = notif.id || crypto.randomUUID().replace(/-/g,"").substring(0,9);
 
     if (persist && firebaseUid) {
       try {
@@ -256,8 +221,10 @@ export default function App() {
     });
   };
 
-  // Firestore Real-time Sync
+  // Firestore Real-time Sync — só inicia após autenticação confirmada
   useEffect(() => {
+    if (!auth.currentUser) return;
+
     const collections = [
       { name: 'patients', setter: setPatients },
       { name: 'dentists', setter: setDentists },
@@ -328,7 +295,7 @@ export default function App() {
   }, [user]);
 
   const addUser = async (data: Omit<User, 'id'>) => {
-    const id = Math.random().toString(36).substr(2, 9);
+    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
     const email = data.email.trim().toLowerCase();
     const password = (data as any).password as string | undefined;
 
@@ -452,7 +419,7 @@ export default function App() {
 
   const logAction = async (action: string, entityType: AuditLog['entityType'], entityId?: string, details?: string) => {
     if (!user) return;
-    const id = Math.random().toString(36).substr(2, 9);
+    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
     const newLog: AuditLog = {
       id,
       userId: user.id,
@@ -661,7 +628,7 @@ export default function App() {
       return;
     }
     
-    const id = data.id || Math.random().toString(36).substr(2, 9);
+    const id = data.id || crypto.randomUUID().replace(/-/g,"").substring(0,9);
     const newPatient: Patient = {
       ...data,
       id,
@@ -752,7 +719,7 @@ export default function App() {
 
   // Dentist Handlers
   const addDentist = async (data: Omit<Dentist, 'id' | 'createdAt' | 'isActive'>) => {
-    const id = Math.random().toString(36).substr(2, 9);
+    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
     const password = (data as any).password as string | undefined;
     let authUid: string | undefined;
 
@@ -835,7 +802,7 @@ export default function App() {
 
   // Attendant Handlers
   const addAttendant = async (data: Omit<Attendant, 'id' | 'createdAt' | 'isActive'>) => {
-    const id = Math.random().toString(36).substr(2, 9);
+    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
     const password = (data as any).password as string | undefined;
     let authUid: string | undefined;
 
@@ -944,7 +911,7 @@ export default function App() {
       const newNotifs = newAppointments.map((apt) => {
         const patientName = patients.find(p => p.id === apt.patientId)?.name || 'Paciente';
         return {
-          id: Math.random().toString(36).substr(2, 9),
+          id: crypto.randomUUID().replace(/-/g,"").substring(0,9),
           message: `Novo agendamento: ${patientName} em ${parseDate(apt.date).toLocaleDateString('pt-BR')} às ${apt.time}`,
           type: 'success' as const,
         };
@@ -979,7 +946,7 @@ export default function App() {
           if (!dentistOverdueNotifMapRef.current[apt.id] && !notifications.some(n => n.appointmentId === apt.id)) {
             const patientName = patients.find(p => p.id === apt.patientId)?.name || 'Paciente';
             const notif = {
-              id: `overdue-${apt.id}-${Math.random().toString(36).substr(2,6)}`,
+              id: `overdue-${apt.id}-${crypto.randomUUID().replace(/-/g,"").substring(0,9)}`,
               message: `Agendamento não finalizado: ${patientName} em ${parseDate(apt.date).toLocaleDateString('pt-BR')} às ${apt.time}`,
               type: 'info' as const
             };
@@ -1128,7 +1095,7 @@ export default function App() {
 
     if (conflict) {
       const newNotification = {
-        id: Math.random().toString(36).substr(2, 9),
+        id: crypto.randomUUID().replace(/-/g,"").substring(0,9),
         message: `Conflito de horário: Este dentista já possui um agendamento para este horário.`,
         type: 'info' as const
       };
@@ -1136,7 +1103,7 @@ export default function App() {
       return;
     }
 
-    const id = Math.random().toString(36).substr(2, 9);
+    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
     const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
     const dentistAuthUid = getAuthUidForUserId(data.dentistId) || null;
 
@@ -1175,16 +1142,16 @@ export default function App() {
             console.error('Falha ao enviar e-mail de agendamento', e);
           }
         } else {
-          const noEmailNotif = { id: Math.random().toString(36).substr(2,9), message: `Paciente não possui e-mail cadastrado — notificação por e-mail não enviada.`, type: 'info' as const };
+          const noEmailNotif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: `Paciente não possui e-mail cadastrado — notificação por e-mail não enviada.`, type: 'info' as const };
           addNotification(noEmailNotif);
         }
 
-        const notif = { id: Math.random().toString(36).substr(2,9), message: 'Agendamento criado.', type: 'success' as const };
+        const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Agendamento criado.', type: 'success' as const };
         addNotification(notif);
         // Mostrar confirmação na tela do paciente quando o agendamento for criado por ele
         if (user?.role === 'patient' && user.id === data.patientId) {
           const patientNotif = {
-            id: Math.random().toString(36).substr(2, 9),
+            id: crypto.randomUUID().replace(/-/g,"").substring(0,9),
             message: `Agendamento confirmado para ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}.`,
             type: 'success' as const
           };
@@ -1280,7 +1247,7 @@ export default function App() {
 
   // Treatment Handlers
   const addTreatment = async (data: Omit<Treatment, 'id' | 'createdAt'>) => {
-    const id = Math.random().toString(36).substr(2, 9);
+    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
     const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
     const newTreatment: Treatment = {
       ...data,
@@ -1307,7 +1274,7 @@ export default function App() {
   };
 
   const addDocument = async (data: Omit<PatientDocument, 'id' | 'uploadedAt'>) => {
-    const id = Math.random().toString(36).substr(2, 9);
+    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
     const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
     const newDoc: PatientDocument = {
       ...data,
@@ -1664,10 +1631,10 @@ export default function App() {
               onConfirmAppointment={async (id: string) => {
                 try {
                   await updateAppointmentStatus(id, 'confirmed');
-                  const notif = { id: Math.random().toString(36).substr(2,9), message: 'Agendamento confirmado com sucesso.', type: 'success' as const };
+                  const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Agendamento confirmado com sucesso.', type: 'success' as const };
                   addNotification(notif);
                 } catch (err) {
-                  const notif = { id: Math.random().toString(36).substr(2,9), message: 'Falha ao confirmar agendamento.', type: 'info' as const };
+                  const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Falha ao confirmar agendamento.', type: 'info' as const };
                   addNotification(notif);
                   console.error('Confirm appointment error', err);
                 }
@@ -1700,15 +1667,15 @@ export default function App() {
                         console.error('Falha ao enviar e-mail de cancelamento', e);
                       }
                     } else {
-                      const noEmailNotif = { id: Math.random().toString(36).substr(2,9), message: `Paciente não possui e-mail cadastrado — notificação de cancelamento não enviada.`, type: 'info' as const };
+                      const noEmailNotif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: `Paciente não possui e-mail cadastrado — notificação de cancelamento não enviada.`, type: 'info' as const };
                       addNotification(noEmailNotif);
                     }
                   }
 
-                  const notif = { id: Math.random().toString(36).substr(2,9), message: 'Agendamento cancelado.', type: 'info' as const };
+                  const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Agendamento cancelado.', type: 'info' as const };
                   addNotification(notif);
                 } catch (err) {
-                  const notif = { id: Math.random().toString(36).substr(2,9), message: 'Falha ao cancelar agendamento.', type: 'info' as const };
+                  const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Falha ao cancelar agendamento.', type: 'info' as const };
                   addNotification(notif);
                   console.error('Cancel appointment error', err);
                 }

@@ -44,6 +44,21 @@ const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const DATA_FILE = path.join(process.cwd(), "data.json");
 
+// Middleware: verifica Firebase ID Token no header Authorization (Bearer <token>)
+const requireAuth = async (req: any, res: any, next: any) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const idToken = authHeader.split('Bearer ')[1];
+  try {
+    req.firebaseUser = await admin.auth().verifyIdToken(idToken);
+    next();
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+};
+
 // Simple file-based debug logger for email flows (helps capture logs when
 // server output isn't visible in the terminal session)
 const DEBUG_LOG_DIR = path.join(process.cwd(), 'tmp');
@@ -224,12 +239,14 @@ app.get("/auth/google/callback", async (req, res) => {
       saveData(data);
     }
 
+    const allowedOrigin = process.env.APP_ORIGIN || `http://localhost:${PORT}`;
     res.send(`
       <html>
         <body>
           <script>
+            var allowed = ${JSON.stringify(allowedOrigin)};
             if (window.opener) {
-              window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+              window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, allowed);
               window.close();
             } else {
               window.location.href = '/';
@@ -323,7 +340,7 @@ const createGoogleEventForDentist = async (dentistId: string, eventBody: any) =>
 };
 
 // Endpoint to insert a test event for a dentist (useful for verifying integration)
-app.post('/api/google/insert-test-event', async (req, res) => {
+app.post('/api/google/insert-test-event', requireAuth, async (req: any, res: any) => {
   const dentistId = req.body?.dentistId;
   if (!dentistId) return res.status(400).json({ error: 'dentistId is required' });
   const start = req.body?.start || new Date().toISOString();
@@ -344,7 +361,7 @@ app.post('/api/google/insert-test-event', async (req, res) => {
   }
 });
 
-app.put("/api/users/:id", (req, res) => {
+app.put("/api/users/:id", requireAuth, (req: any, res: any) => {
   const { id } = req.params;
   const updatedUser = req.body;
   const data = getData();
