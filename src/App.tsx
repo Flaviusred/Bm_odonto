@@ -29,7 +29,7 @@ import { emailService } from './services/emailService';
 import LoadingOverlay from './components/LoadingOverlay';
 import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
 import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField, orderBy, getDocs } from 'firebase/firestore';
-import { sendPasswordResetEmail, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { sendPasswordResetEmail, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { db, auth, createAuthUserWithSecondaryApp } from './firebase';
 
 enum OperationType {
@@ -221,9 +221,15 @@ export default function App() {
     });
   };
 
-  // Firestore Real-time Sync — só inicia após autenticação confirmada
+  // Firestore Real-time Sync — reactivo ao estado de autenticação do Firebase
+  const [firebaseAuthReady, setFirebaseAuthReady] = useState(false);
   useEffect(() => {
-    if (!auth.currentUser) return;
+    const unsub = onAuthStateChanged(auth, () => setFirebaseAuthReady(true));
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (!firebaseAuthReady) return;
 
     const collections = [
       { name: 'patients', setter: setPatients },
@@ -263,7 +269,7 @@ export default function App() {
       unsubscribes.forEach(unsub => unsub());
       unsubscribeSettings();
     };
-  }, [db]);
+  }, [db, firebaseAuthReady]);
 
   const updateReminderSettings = async (newSettings: typeof reminderSettings) => {
     try {
