@@ -401,6 +401,113 @@ app.post("/api/send-email", async (req, res) => {
   }
 });
 
+// Password-reset via server: validates email+CPF in Firestore, generates token, sends email through nodemailer.
+app.post('/api/forgot-password', async (req, res) => {
+  const { email, cpf } = req.body || {};
+  if (!email || !cpf) {
+    return res.status(400).json({ error: 'email e cpf são obrigatórios' });
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const normalizedCpf = String(cpf).replace(/\D/g, '');
+
+  console.log(`/api/forgot-password -> email=${normalizedEmail}`);
+  appendDebugLog(`/api/forgot-password -> email=${normalizedEmail}`);
+
+  if (!db) {
+    console.error('/api/forgot-password: Firestore não inicializado');
+    return res.status(500).json({ error: 'Serviço indisponível, tente novamente mais tarde.' });
+  }
+
+  try {
+    // Busca por e-mail + CPF na coleção `users`
+    let userId: string | null = null;
+    let userName = '';
+    let userEmail = normalizedEmail;
+
+    const usersSnap = await db.collection('users')
+      .where('email', '==', normalizedEmail)
+      .limit(10)
+      .get();
+
+    usersSnap.forEach((docSnap: any) => {
+      const d = docSnap.data();
+      const docCpf = String(d.cpf || '').replace(/\D/g, '');
+      if (docCpf === normalizedCpf) {
+        userId = docSnap.id;
+        userName = d.name || '';
+        userEmail = d.email || normalizedEmail;
+      }
+    });
+
+    // Se não encontrou em `users`, tenta em `patients`
+    if (!userId) {
+      const patientsSnap = await db.collection('patients')
+        .where('email', '==', normalizedEmail)
+        .limit(10)
+        .get();
+
+      patientsSnap.forEach((docSnap: any) => {
+        const d = docSnap.data();
+        const docCpf = String(d.cpf || '').replace(/\D/g, '');
+        if (docCpf === normalizedCpf) {
+          userId = docSnap.id;
+          userName = d.name || '';
+          userEmail = d.email || normalizedEmail;
+        }
+      });
+    }
+
+    if (!userId) {
+      console.warn(`/api/forgot-password: usuário não encontrado -> email=${normalizedEmail}`);
+      appendDebugLog(`/api/forgot-password: usuário não encontrado -> email=${normalizedEmail}`);
+      // Retorna 200 para não revelar ao atacante se o e-mail existe
+      return res.json({ status: 'ok' });
+    }
+
+    // Gera token seguro
+    const crypto = await import('crypto');
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hora
+
+    await db.collection('users').doc(userId).set(
+      { passwordResetToken: token, passwordResetExpires: expiresAt },
+      { merge: true }
+    );
+
+    const siteUrl = (process.env.SITE_URL || 'http://localhost:3000').replace(/\/$/, '');
+    const resetLink = `${siteUrl}/?resetToken=${token}&uid=${userId}`;
+
+    console.log(`/api/forgot-password: token gerado para userId=${userId}, link=${resetLink}`);
+    appendDebugLog(`/api/forgot-password: token gerado userId=${userId}`);
+
+    // Usa o template de recuperação já existente no emailService (via servidor)
+    const subject = 'Recuperação de senha - Bravo Odonto';
+    const text = `Olá ${userName},\n\nRecebemos uma solicitação para redefinir sua senha. Acesse o link abaixo:\n\n${resetLink}\n\nO link expira em 1 hora. Se não solicitou, ignore este e-mail.`;
+    const htmlBody = `
+      <p>Olá <strong>${userName}</strong>,</p>
+      <p>Você solicitou a redefinição de senha do seu acesso ao <strong>Bravo Odonto</strong>.</p>
+      <p>Clique no botão abaixo para criar uma nova senha. O link expira em <strong>1 hora</strong>.</p>
+      <p style="text-align:center;margin:24px 0">
+        <a href="${resetLink}" style="display:inline-block;padding:12px 24px;background:#10B981;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold">Redefinir Senha</a>
+      </p>
+      <p style="font-size:12px;color:#666">Se você não solicitou essa alteração, ignore este e-mail.</p>
+      <hr/>
+      <p style="font-size:12px;color:#666"><strong>Por segurança, não compartilhe este link com ninguém.</strong></p>
+    `;
+
+    const info = await sendRawEmail(userEmail, subject, text, htmlBody);
+    console.log(`/api/forgot-password: e-mail enviado -> messageId=${(info as any)?.messageId}`);
+    appendDebugLog(`/api/forgot-password: e-mail enviado -> messageId=${(info as any)?.messageId}`);
+
+    return res.json({ status: 'ok' });
+  } catch (err) {
+    console.error('/api/forgot-password error:', err);
+    appendDebugLog(`/api/forgot-password error: ${err}`);
+    return res.status(500).json({ error: 'Erro ao processar recuperação de senha.', details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // Web-friendly endpoint to trigger a test email (useful in production admin panel)
 app.post('/api/send-test-email', async (req, res) => {
   const to = req.body?.to || process.env.EMAIL_USER;

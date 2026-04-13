@@ -1384,33 +1384,34 @@ export default function App() {
 
   const handleForgotPassword = async () => {
     const email = (forgotPasswordEmail || '').trim().toLowerCase();
-    const cpfNormalized = (forgotPasswordCpf || '').replace(/\D/g, '');
+    const cpf = (forgotPasswordCpf || '').replace(/\D/g, '');
 
-    // Primeiro tenta encontrar no collection `users` (caso o cpf tenha sido salvo lá)
-    let userToUpdate: any = users.find(u => u.email && u.email.toLowerCase() === email && u.cpf && u.cpf.replace(/\D/g, '') === cpfNormalized);
-
-    // Se não encontrou, tenta pela collection `patients` (pacientes normalmente têm o CPF)
-    let patientMatch: any = null;
-    if (!userToUpdate) {
-      patientMatch = patients.find(p => p.email && p.email.toLowerCase() === email && p.cpf && p.cpf.replace(/\D/g, '') === cpfNormalized);
-      if (patientMatch) {
-        // Tenta achar o usuário correspondente por id; se não existir criaremos/atualizaremos o doc `users` em seguida
-        userToUpdate = users.find(u => u.id === patientMatch.id) || { id: patientMatch.id, email: patientMatch.email, name: patientMatch.name };
-      }
+    if (!email || !cpf) {
+      alert('Preencha o e-mail e o CPF para recuperar a senha.');
+      return;
     }
 
-    if (userToUpdate) {
-      try {
-        await sendPasswordResetEmail(auth, String(userToUpdate.email).toLowerCase());
-        alert('Enviamos um e-mail do Firebase Authentication para redefinição de senha. Verifique sua caixa de entrada.');
-        setIsForgotPasswordOpen(false);
-        setForgotPasswordEmail('');
-        setForgotPasswordCpf('');
-      } catch (error) {
-        handleFirestoreError(error, OperationType.WRITE, `users/${userToUpdate.id}`);
-      }
-    } else {
-      alert('Usuário não encontrado ou CPF incorreto.');
+    try {
+      await runWithLoading(async () => {
+        const response = await fetch('/api/forgot-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, cpf }),
+        });
+
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error((err as any).error || 'Erro ao solicitar recuperação de senha.');
+        }
+      });
+
+      alert('Se o e-mail e CPF corresponderem a uma conta, você receberá um link de recuperação de senha em instantes. Verifique sua caixa de entrada e a pasta de spam.');
+      setIsForgotPasswordOpen(false);
+      setForgotPasswordEmail('');
+      setForgotPasswordCpf('');
+    } catch (error: any) {
+      console.error('handleForgotPassword error:', error);
+      alert(error?.message || 'Ocorreu um erro. Tente novamente.');
     }
   };
 
