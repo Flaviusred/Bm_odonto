@@ -1,0 +1,268 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A system user",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "dentist", "patient", "attendant"] },
+        "permissions": { "type": "array", "items": { "type": "string" } },
+        "photoURL": { "type": "string" },
+        "cpf": { "type": "string" },
+        "phone": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "role", "permissions"]
+    },
+    "Patient": {
+      "title": "Patient",
+      "description": "A patient in the dental clinic",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "cpf": { "type": "string" },
+        "birthDate": { "type": "string", "format": "date" },
+        "address": { "type": "string" },
+        "cep": { "type": "string" },
+        "street": { "type": "string" },
+        "number": { "type": "string" },
+        "neighborhood": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "anamnesis": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "isActive": { "type": "boolean" },
+        "patientType": { "type": "string", "enum": ["cbmpb", "security", "civil"] },
+        "securityType": { "type": "string", "enum": ["pm", "pc", "pp"] },
+        "registrationNumber": { "type": "string" },
+        "functionalCategory": { "type": "string" },
+        "dependentOf": { "type": "string" },
+        "parentesco": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "cpf", "birthDate", "createdAt", "isActive", "patientType"]
+    },
+    "Dentist": {
+      "title": "Dentist",
+      "description": "A dentist in the clinic",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "specialty": { "type": "string" },
+        "cro": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "name", "email", "phone", "specialty", "cro", "createdAt", "isActive"]
+    },
+    "Attendant": {
+      "title": "Attendant",
+      "description": "A clinic attendant",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "name", "email", "phone", "createdAt", "isActive"]
+    },
+    "Appointment": {
+      "title": "Appointment",
+      "description": "A dental appointment",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "patientId": { "type": "string" },
+        "dentistId": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "time": { "type": "string" },
+        "status": { "type": "string", "enum": ["scheduled", "confirmed", "cancelled", "completed", "blocked"] },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "patientId", "dentistId", "date", "time", "status", "createdAt"]
+    },
+    "Treatment": {
+      "title": "Treatment",
+      "description": "A dental treatment performed",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "patientId": { "type": "string" },
+        "dentistId": { "type": "string" },
+        "appointmentId": { "type": "string" },
+        "description": { "type": "string" },
+        "type": { "type": "string", "enum": ["cleaning", "extraction", "filling", "root-canal", "orthodontics", "other"] },
+        "date": { "type": "string", "format": "date" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "patientId", "dentistId", "description", "date", "createdAt"]
+    },
+    "PatientDocument": {
+      "title": "PatientDocument",
+      "description": "A document uploaded for a patient",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "patientId": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["exam", "document", "x-ray"] },
+        "url": { "type": "string" },
+        "uploadedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "patientId", "name", "type", "url", "uploadedAt"]
+    },
+    "InventoryItem": {
+      "title": "InventoryItem",
+      "description": "An item in the clinic inventory",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "quantity": { "type": "number" },
+        "minQuantity": { "type": "number" },
+        "unit": { "type": "string" },
+        "category": { "type": "string" },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "quantity", "minQuantity", "unit", "category", "lastUpdated"]
+    },
+    "InventoryMovement": {
+      "title": "InventoryMovement",
+      "description": "A movement in the inventory (in/out)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "itemId": { "type": "string" },
+        "itemName": { "type": "string" },
+        "type": { "type": "string", "enum": ["in", "out"] },
+        "quantity": { "type": "number" },
+        "reason": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" }
+      },
+      "required": ["id", "itemId", "itemName", "type", "quantity", "reason", "date", "userId", "userName"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "A clinic announcement",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "link": { "type": "string" },
+        "mediaUrl": { "type": "string" },
+        "targetRoles": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "active": { "type": "boolean" }
+      },
+      "required": ["id", "title", "content", "targetRoles", "createdAt", "active"]
+    },
+    "DentistSchedule": {
+      "title": "DentistSchedule",
+      "description": "A dentist's working schedule",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "dentistId": { "type": "string" },
+        "dayOfWeek": { "type": "integer" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "slotDuration": { "type": "integer" }
+      },
+      "required": ["id", "dentistId", "dayOfWeek", "startTime", "endTime", "slotDuration"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "An audit log entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "action": { "type": "string" },
+        "entityType": { "type": "string" },
+        "entityId": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "userName", "action", "entityType", "details", "timestamp"]
+    },
+    "ReminderSettings": {
+      "title": "ReminderSettings",
+      "description": "Clinic reminder settings",
+      "type": "object",
+      "properties": {
+        "emailReminders": { "type": "boolean" },
+        "reminderHoursBefore": { "type": "integer" }
+      },
+      "required": ["emailReminders", "reminderHoursBefore"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "User" },
+      "description": "Collection of users"
+    },
+    "/patients/{patientId}": {
+      "schema": { "$ref": "Patient" },
+      "description": "Collection of patients"
+    },
+    "/dentists/{dentistId}": {
+      "schema": { "$ref": "Dentist" },
+      "description": "Collection of dentists"
+    },
+    "/attendants/{attendantId}": {
+      "schema": { "$ref": "Attendant" },
+      "description": "Collection of attendants"
+    },
+    "/appointments/{appointmentId}": {
+      "schema": { "$ref": "Appointment" },
+      "description": "Collection of appointments"
+    },
+    "/treatments/{treatmentId}": {
+      "schema": { "$ref": "Treatment" },
+      "description": "Collection of treatments"
+    },
+    "/documents/{documentId}": {
+      "schema": { "$ref": "PatientDocument" },
+      "description": "Collection of patient documents"
+    },
+    "/inventory/{itemId}": {
+      "schema": { "$ref": "InventoryItem" },
+      "description": "Collection of inventory items"
+    },
+    "/movements/{movementId}": {
+      "schema": { "$ref": "InventoryMovement" },
+      "description": "Collection of inventory movements"
+    },
+    "/announcements/{announcementId}": {
+      "schema": { "$ref": "Announcement" },
+      "description": "Collection of announcements"
+    },
+    "/schedules/{scheduleId}": {
+      "schema": { "$ref": "DentistSchedule" },
+      "description": "Collection of dentist schedules"
+    },
+    "/audit_logs/{logId}": {
+      "schema": { "$ref": "AuditLog" },
+      "description": "Collection of audit logs"
+    },
+    "/settings/reminders": {
+      "schema": { "$ref": "ReminderSettings" },
+      "description": "Reminder settings document"
+    }
+  }
+}

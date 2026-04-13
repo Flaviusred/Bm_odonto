@@ -46,8 +46,6 @@ export const patientService = {
       // Mapeamento dos dependentes
       const dependentes: Partial<Patient>[] = (data.dependente || data.dependentes || []).map((dep: any) => ({
         name: dep.nome,
-        email: dep.email || data.email || '',
-        phone: dep.telefone || dep.phone || data.telefone || data.phone || '',
         cpf: dep.cpf,
         birthDate: dep.data_nascimento ? dep.data_nascimento.split('/').reverse().join('-') : '', // Converte DD/MM/YYYY para YYYY-MM-DD
         patientType: 'cbmpb',

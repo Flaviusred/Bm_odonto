@@ -1,9 +1,0 @@
-{
-  "patients": [],
-  "dentists": [],
-  "appointments": [],
-  "settings": {
-    "emailReminders": true,
-    "reminderHoursBefore": 24
-  }
-}

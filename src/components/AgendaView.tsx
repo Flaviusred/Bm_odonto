@@ -36,15 +36,6 @@ export function AgendaView({
   const [selectedDentistId, setSelectedDentistId] = useState<string>(initialDentistId);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [expandedMobileDay, setExpandedMobileDay] = useState<number | null>(null);
-  const [hidePast, setHidePast] = useState(true);
-
-  /** Retorna true se a data+hora do agendamento já passou */
-  const isPastApt = (apt: Appointment): boolean => {
-    const d = parseDate(apt.date);
-    const [h, m] = apt.time.split(':').map(Number);
-    d.setHours(h, m, 0, 0);
-    return d < new Date();
-  };
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
@@ -66,7 +57,7 @@ export function AgendaView({
     if (!patient) return;
 
     const date = parseDate(apt.date).toLocaleDateString('pt-BR');
-    const message = `Olá aqui é uma mensagem da Diretoria de Saúde - CBMPB ${patient.name}, este é um lembrete da sua consulta no Gabinete Odontológico com ${getDentistName(apt.dentistId)} no dia ${date} às ${apt.time}.`;
+    const message = `Olá ${patient.name}, este é um lembrete da sua consulta na OdontoClinic com ${getDentistName(apt.dentistId)} no dia ${date} às ${apt.time}.`;
     const phone = patient.phone.replace(/\D/g, '');
     const url = `https://wa.me/55${phone}?text=${encodeURIComponent(message)}`;
     window.open(url, '_blank');
@@ -153,9 +144,8 @@ export function AgendaView({
     return appointments.filter(apt => {
       const aptDate = parseDate(apt.date);
       const matchesDentist = selectedDentistId === 'all' || apt.dentistId === selectedDentistId;
-
+      
       if (!matchesDentist) return false;
-      if (hidePast && isPastApt(apt)) return false;
 
       if (view === 'day') {
         return aptDate.toDateString() === currentDate.toDateString();
@@ -190,11 +180,11 @@ export function AgendaView({
                 <div key={day} className="text-center text-xs font-bold text-zinc-500 py-2">{day}</div>
               ))}
               {blanks.map(b => <div key={`blank-${b}`} />)}
-                {days.map(day => {
+              {days.map(day => {
                 const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                const apts = appointments.filter(a => a.date === dateStr && (selectedDentistId === 'all' || a.dentistId === selectedDentistId) && (!hidePast || !isPastApt(a)));
+                const apts = appointments.filter(a => a.date === dateStr && (selectedDentistId === 'all' || a.dentistId === selectedDentistId));
                 return (
-                  <div key={day} className="min-h-[80px] p-2 border border-zinc-100 rounded-lg hover:bg-zinc-50 cursor-pointer" onClick={() => { setCurrentDate(parseDate(dateStr)); setView('day'); setDisplayMode('list'); }}>
+                  <div key={day} className="min-h-[80px] p-2 border border-zinc-100 rounded-lg hover:bg-zinc-50 cursor-pointer" onClick={() => { setCurrentDate(new Date(dateStr)); setView('day'); setDisplayMode('list'); }}>
                     <div className="text-sm font-bold text-zinc-900">{day}</div>
                     <div className="space-y-1 mt-1">
                       {apts.slice(0, 3).map(apt => (
@@ -219,7 +209,7 @@ export function AgendaView({
           <div className="md:hidden space-y-2">
             {days.map(day => {
               const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-              const apts = appointments.filter(a => a.date === dateStr && (selectedDentistId === 'all' || a.dentistId === selectedDentistId) && (!hidePast || !isPastApt(a)));
+              const apts = appointments.filter(a => a.date === dateStr && (selectedDentistId === 'all' || a.dentistId === selectedDentistId));
               const isExpanded = expandedMobileDay === day;
               
               return (
@@ -232,7 +222,6 @@ export function AgendaView({
                     onClick={() => {
                       if (apts.length > 0) {
                         setExpandedMobileDay(isExpanded ? null : day);
-                        setCurrentDate(parseDate(dateStr));
                       }
                     }}
                   >
@@ -289,17 +278,6 @@ export function AgendaView({
       });
       const hours = Array.from({ length: 14 }, (_, i) => i + 8); // 08:00 to 21:00
 
-      // Quando hidePast=true, oculta linhas de hora onde todos os dias da semana já passaram
-      const now = new Date();
-      const visibleHours = hidePast
-        ? hours.filter(hour =>
-            days.some(d => {
-              const slot = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour, 59, 59);
-              return slot >= now;
-            })
-          )
-        : hours;
-
       return (
         <div className="w-full max-w-[calc(100vw-16px)] sm:max-w-full overflow-x-auto border border-zinc-200 rounded-lg bg-white relative">
           <div className="grid grid-cols-[60px_repeat(7,minmax(120px,1fr))] min-w-[900px]">
@@ -313,14 +291,14 @@ export function AgendaView({
             ))}
             
             {/* Time Grid */}
-            {visibleHours.map(hour => (
+            {hours.map(hour => (
               <React.Fragment key={hour}>
                 <div className="border-b border-r border-zinc-200 p-2 text-xs text-zinc-400 text-right pr-2 sticky left-0 bg-white z-10">
                   {`${String(hour).padStart(2, '0')}:00`}
                 </div>
                 {days.map(d => {
                   const dateStr = formatDateLocal(d);
-                  const apts = appointments.filter(a => a.date === dateStr && parseInt(a.time.split(':')[0]) === hour && (selectedDentistId === 'all' || a.dentistId === selectedDentistId) && (!hidePast || !isPastApt(a)));
+                  const apts = appointments.filter(a => a.date === dateStr && parseInt(a.time.split(':')[0]) === hour && (selectedDentistId === 'all' || a.dentistId === selectedDentistId));
                   return (
                     <div key={d.toISOString() + hour} className="border-b border-r border-zinc-200 min-h-[60px] p-1 relative">
                       {apts.map(apt => (
@@ -346,7 +324,7 @@ export function AgendaView({
     } else {
       // day view
       const dateStr = formatDateLocal(currentDate);
-      const apts = appointments.filter(a => a.date === dateStr && (selectedDentistId === 'all' || a.dentistId === selectedDentistId) && (!hidePast || !isPastApt(a)));
+      const apts = appointments.filter(a => a.date === dateStr && (selectedDentistId === 'all' || a.dentistId === selectedDentistId));
       return (
         <div className="space-y-2">
           {apts.length > 0 ? apts.map(apt => (
@@ -454,21 +432,6 @@ export function AgendaView({
               </Button>
             ))}
           </div>
-          {/* Toggle ocultar passados */}
-          <button
-            type="button"
-            onClick={() => setHidePast(p => !p)}
-            className={cn(
-              'flex items-center gap-2 h-10 px-3 rounded-xl border text-xs font-bold transition-colors shrink-0',
-              hidePast
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100'
-                : 'bg-white border-zinc-200 text-zinc-500 hover:bg-zinc-50'
-            )}
-            title={hidePast ? 'Mostrar agendamentos passados' : 'Ocultar agendamentos passados'}
-          >
-            <Clock className="h-3.5 w-3.5 shrink-0" />
-            <span className="hidden sm:inline">{hidePast ? 'Ocultando passados' : 'Mostrar passados'}</span>
-          </button>
           <div className="hidden sm:flex shrink-0 ml-auto">
             <Button onClick={() => {
               setFormData({ patientId: '', dentistId: '', date: '', time: '', notes: '' });
@@ -538,16 +501,7 @@ export function AgendaView({
                       <>
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEditModal(apt)} title="Editar"><UserRound className="h-4 w-4 text-zinc-500" /></Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleWhatsAppReminder(apt)} title="Lembrete WhatsApp"><MessageCircle className="h-4 w-4 text-emerald-500" /></Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className={cn("h-8 w-8", apt.status === 'confirmed' && "opacity-50 cursor-not-allowed")}
-                          onClick={() => onUpdateStatus(apt.id, 'confirmed')}
-                          title={apt.status === 'confirmed' ? "Já confirmado" : "Confirmar"}
-                          disabled={apt.status === 'confirmed'}
-                        >
-                          <CheckCircle2 className="h-4 w-4 text-blue-500" />
-                        </Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onUpdateStatus(apt.id, 'confirmed')} title="Confirmar"><CheckCircle2 className="h-4 w-4 text-blue-500" /></Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onUpdateStatus(apt.id, 'completed')} title="Concluir"><CheckCircle2 className="h-4 w-4 text-emerald-500" /></Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onUpdateStatus(apt.id, 'cancelled')} title="Cancelar"><XCircle className="h-4 w-4 text-red-500" /></Button>
                       </>
@@ -664,23 +618,13 @@ export function AgendaView({
                     let [endH, endM] = schedule.endTime.split(':').map(Number);
                     let current = startH * 60 + startM;
                     const end = endH * 60 + endM;
-
-                    // Para comparação com o horário atual quando a data for hoje
-                    const now = new Date();
-                    const selectedDate = parseDate(formData.date);
-                    const isToday =
-                      selectedDate.getFullYear() === now.getFullYear() &&
-                      selectedDate.getMonth() === now.getMonth() &&
-                      selectedDate.getDate() === now.getDate();
-                    const nowMinutes = now.getHours() * 60 + now.getMinutes();
-
+                    
                     while (current + schedule.slotDuration <= end) {
                       const h = Math.floor(current / 60);
                       const m = current % 60;
                       const timeStr = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
                       const isBooked = appointments.some(a => a.dentistId === formData.dentistId && a.date === formData.date && a.time === timeStr && a.status !== 'cancelled' && a.id !== editingAppointment?.id);
-                      const isPast = isToday && current <= nowMinutes;
-                      if (!isBooked && !isPast) slots.push(timeStr);
+                      if (!isBooked) slots.push(timeStr);
                       current += schedule.slotDuration;
                     }
                     
@@ -704,13 +648,6 @@ export function AgendaView({
                   required 
                   value={formData.time}
                   error={errors.time}
-                  min={(() => {
-                    if (!formData.date) return undefined;
-                    const sel = parseDate(formData.date);
-                    const now = new Date();
-                    const isToday = sel.getFullYear() === now.getFullYear() && sel.getMonth() === now.getMonth() && sel.getDate() === now.getDate();
-                    return isToday ? `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}` : undefined;
-                  })()}
                   onChange={(e) => setFormData({ ...formData, time: e.target.value })}
                 />
               )}

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import React from 'react';
-import { Plus, Search, UserRound, Phone, Mail, Award, Trash2, Edit2, ArrowLeft } from 'lucide-react';
+import { Plus, Search, UserRound, Phone, Mail, Award, Trash2, Edit2 } from 'lucide-react';
 import { Button } from './Button';
 import { Card, CardContent, CardHeader, CardTitle } from './Card';
 import { Input } from './Input';
@@ -13,10 +13,9 @@ interface AttendantListProps {
   onAddAttendant: (attendant: Omit<Attendant, 'id' | 'createdAt' | 'isActive'>) => void;
   onDeleteAttendant: (id: string) => void;
   onUpdateAttendant: (attendant: Attendant) => void;
-  onTabChange?: (tab: string) => void;
 }
 
-export function AttendantList({ attendants, onAddAttendant, onDeleteAttendant, onUpdateAttendant, onTabChange }: AttendantListProps) {
+export function AttendantList({ attendants, onAddAttendant, onDeleteAttendant, onUpdateAttendant }: AttendantListProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [editingAttendant, setEditingAttendant] = useState<Attendant | null>(null);
@@ -26,10 +25,6 @@ export function AttendantList({ attendants, onAddAttendant, onDeleteAttendant, o
   const [confirmAction, setConfirmAction] = useState<{ type: 'disable' | 'password', attendant: Attendant } | null>(null);
   const [generatedPassword, setGeneratedPassword] = useState<{ password: string, email: string } | null>(null);
 
-  const handleBackFromAttendants = () => {
-    onTabChange?.('dashboard');
-  };
-
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -38,7 +33,7 @@ export function AttendantList({ attendants, onAddAttendant, onDeleteAttendant, o
   });
 
   const filteredAttendants = attendants.filter(a => 
-    (a.name || '').toLowerCase().includes(searchTerm.toLowerCase())
+    a.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const validate = () => {
@@ -269,17 +264,11 @@ export function AttendantList({ attendants, onAddAttendant, onDeleteAttendant, o
   return (
     <div className="p-4 lg:p-8 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-2">
-          <Button className="gap-2 sm:hidden w-fit h-10 px-4" onClick={handleBackFromAttendants}>
-            <ArrowLeft className="h-4 w-4" />
-            Voltar
-          </Button>
-          <div>
+        <div>
           <h1 className="text-2xl font-bold text-zinc-900">Atendentes</h1>
           <p className="text-zinc-500">Gerencie a equipe de atendimento</p>
-          </div>
         </div>
-        <Button onClick={() => setIsModalOpen(true)} className="gap-2 w-full sm:w-auto h-10">
+        <Button onClick={() => setIsModalOpen(true)} className="gap-2">
           <Plus className="h-4 w-4" />
           Novo Atendente
         </Button>
@@ -307,11 +296,11 @@ export function AttendantList({ attendants, onAddAttendant, onDeleteAttendant, o
               >
                 <div className="flex items-center gap-3 group/name text-left flex-1 min-w-0">
                   <div className="h-10 w-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold transition-colors group-hover/name:bg-emerald-100 shrink-0">
-                    {(attendant.name || '?').charAt(0)}
+                    {attendant.name.charAt(0)}
                   </div>
                   <div className="flex flex-col min-w-0">
                     <span className="font-medium text-zinc-900 group-hover/name:text-emerald-600 transition-colors truncate">
-                      {attendant.name || '—'}
+                      {attendant.name}
                     </span>
                     <div className="flex flex-wrap gap-1 mt-0.5">
                       <span className="text-[10px] text-zinc-500 uppercase font-bold">{attendant.email}</span>

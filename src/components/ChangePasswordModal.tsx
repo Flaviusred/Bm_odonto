@@ -3,8 +3,6 @@ import { Modal } from './Modal';
 import { Input } from './Input';
 import { Button } from './Button';
 import { User } from '../types';
-import { EmailAuthProvider, reauthenticateWithCredential, updatePassword } from 'firebase/auth';
-import { auth } from '../firebase';
 
 interface ChangePasswordModalProps {
   isOpen: boolean;
@@ -21,7 +19,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
-    if (!currentPassword) newErrors.currentPassword = 'Senha atual é obrigatória.';
+    if (currentPassword !== user.password) newErrors.currentPassword = 'Senha atual incorreta.';
     if (!newPassword) {
       newErrors.newPassword = 'Nova senha é obrigatória';
     } else if (newPassword.length < 6) {
@@ -32,30 +30,15 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({ isOpen
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = async () => {
-    if (!validate()) return;
-
-    try {
-      const current = auth.currentUser;
-      if (!current || !current.email) {
-        setErrors({ currentPassword: 'Sessão inválida. Faça login novamente.' });
-        return;
-      }
-
-      const credential = EmailAuthProvider.credential(current.email, currentPassword);
-      await reauthenticateWithCredential(current, credential);
-      await updatePassword(current, newPassword);
-
-      // Mantém o fluxo de atualização de perfil sem persistir senha no Firestore.
-      onUpdateUser({ ...user });
+  const handleSubmit = () => {
+    if (validate()) {
+      onUpdateUser({ ...user, password: newPassword });
       onClose();
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
       setErrors({});
       alert('Senha alterada com sucesso!');
-    } catch (error) {
-      setErrors({ currentPassword: 'Não foi possível alterar a senha. Verifique a senha atual.' });
     }
   };
 

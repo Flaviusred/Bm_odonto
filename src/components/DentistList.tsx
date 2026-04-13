@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import React from 'react';
-import { Plus, Search, UserRound, Phone, Mail, Award, Trash2, Edit2, Calendar, ArrowLeft } from 'lucide-react';
+import { Plus, Search, UserRound, Phone, Mail, Award, Trash2, Edit2, Calendar } from 'lucide-react';
 import { Button } from './Button';
 import { Card, CardContent, CardHeader, CardTitle } from './Card';
 import { Input } from './Input';
@@ -37,8 +37,8 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
   });
 
   const filteredDentists = dentists.filter(d => 
-    (d.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (d.specialty || '').toLowerCase().includes(searchTerm.toLowerCase())
+    d.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    d.specialty.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const validate = () => {
@@ -115,39 +115,6 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
     onSelectDentist(dentist.id);
     onTabChange('appointments');
   };
-
-  const handleBackFromDentists = () => {
-    onTabChange('dashboard');
-  };
-
-  const handleOpenDentistDetails = (dentistId: string) => {
-    if (typeof window !== 'undefined') {
-      window.history.pushState({ view: 'dentist-details' }, '');
-    }
-    setSelectedDentistId(dentistId);
-  };
-
-  const handleBackToList = () => {
-    if (typeof window !== 'undefined' && selectedDentistId) {
-      const state = window.history.state as { view?: string } | null;
-      if (state?.view === 'dentist-details') {
-        window.history.back();
-        return;
-      }
-    }
-    setSelectedDentistId(null);
-  };
-
-  useEffect(() => {
-    const onPopState = () => {
-      if (selectedDentistId) {
-        setSelectedDentistId(null);
-      }
-    };
-
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
-  }, [selectedDentistId]);
 
   const renderModals = () => (
     <>
@@ -279,7 +246,7 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
         <div className="p-4 lg:p-8 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-4">
-            <Button onClick={handleBackToList} className="gap-2">
+            <Button variant="ghost" onClick={() => setSelectedDentistId(null)}>
               Voltar para lista
             </Button>
             <h1 className="text-2xl font-bold text-zinc-900">Dentista: {selectedDentistDetails.name}</h1>
@@ -368,17 +335,11 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
   return (
     <div className="p-4 lg:p-8 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-2">
-          <Button className="gap-2 sm:hidden w-fit h-10 px-4" onClick={handleBackFromDentists}>
-            <ArrowLeft className="h-4 w-4" />
-            Voltar
-          </Button>
-          <div>
+        <div>
           <h1 className="text-2xl font-bold text-zinc-900">Dentistas</h1>
           <p className="text-zinc-500">Gerencie a equipe de profissionais</p>
-          </div>
         </div>
-        <Button onClick={() => setIsModalOpen(true)} className="gap-2 w-full sm:w-auto h-10">
+        <Button onClick={() => setIsModalOpen(true)} className="gap-2">
           <Plus className="h-4 w-4" />
           Novo Dentista
         </Button>
@@ -402,15 +363,15 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
               <div 
                 key={dentist.id}
                 className="flex flex-col sm:flex-row sm:items-center justify-between p-4 hover:bg-zinc-50/50 transition-colors border-b border-zinc-100 last:border-0 gap-4 cursor-pointer"
-                onClick={() => handleOpenDentistDetails(dentist.id)}
+                onClick={() => setSelectedDentistId(dentist.id)}
               >
                 <div className="flex items-center gap-3 group/name text-left flex-1 min-w-0">
                   <div className="h-10 w-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold transition-colors group-hover/name:bg-emerald-100 shrink-0">
-                    {(dentist.name || '?').charAt(0)}
+                    {dentist.name.charAt(0)}
                   </div>
                   <div className="flex flex-col min-w-0">
                     <span className="font-medium text-zinc-900 group-hover/name:text-emerald-600 transition-colors truncate">
-                      {dentist.name || '—'}
+                      {dentist.name}
                     </span>
                     <div className="flex flex-wrap gap-1 mt-0.5">
                       <span className="text-[10px] text-zinc-500 uppercase font-bold">CRO: {dentist.cro}</span>

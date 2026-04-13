@@ -7,7 +7,6 @@ import { AgendaView } from './components/AgendaView';
 import { DentistList } from './components/DentistList';
 import { AttendantList } from './components/AttendantList';
 import { TreatmentList } from './components/TreatmentList';
-// AppointmentList was moved to _cleanup/ (replaced by AgendaView)
 import { PatientPortal } from './components/PatientPortal';
 import { DentistPortal } from './components/DentistPortal';
 import { ProfileEditModal } from './components/ProfileEditModal';
@@ -24,13 +23,10 @@ import { formatDate, parseDate } from './lib/dateUtils';
 import { Input } from './components/Input';
 import { Button } from './components/Button';
 import { Modal } from './components/Modal';
-import { Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
+import { Stethoscope, Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
 import { emailService } from './services/emailService';
-import LoadingOverlay from './components/LoadingOverlay';
-import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
-import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField, orderBy, getDocs, writeBatch } from 'firebase/firestore';
-import { sendPasswordResetEmail, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
-import { db, auth, createAuthUserWithSecondaryApp } from './firebase';
+import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, getDocs, query, where, Timestamp } from 'firebase/firestore';
+import { db, auth } from './firebase';
 
 enum OperationType {
   CREATE = 'create',
@@ -41,32 +37,84 @@ enum OperationType {
   WRITE = 'write',
 }
 
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId: string | undefined;
+    email: string | null | undefined;
+    emailVerified: boolean | undefined;
+    isAnonymous: boolean | undefined;
+    tenantId: string | null | undefined;
+    providerInfo: {
+      providerId: string;
+      displayName: string | null;
+      email: string | null;
+      photoUrl: string | null;
+    }[];
+  }
+}
+
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  // Log detalhado apenas no console do servidor/dev, sem expor info sensível para a UI
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`Firestore Error [${operationType}] at ${path}:`, message);
-  throw new Error(`Erro ao acessar dados (${operationType}: ${path}). Tente novamente.`);
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData.map(provider => ({
+        providerId: provider.providerId,
+        displayName: provider.displayName,
+        email: provider.email,
+        photoUrl: provider.photoURL
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
 }
 
 export default function App() {
-  const [globalLoading, setGlobalLoading] = useState(false);
-
-  useEffect(() => {
-    const unsub = subscribeLoading((v) => setGlobalLoading(v));
-    return unsub;
-  }, []);
   const [user, setUser] = useState<User | null>(() => {
-    const saved = sessionStorage.getItem('odonto_user');
+    const saved = localStorage.getItem('odonto_user');
     return saved ? JSON.parse(saved) : null;
   });
   const [loginError, setLoginError] = useState<string | null>(null);
-  const [sessionExpired, setSessionExpired] = useState(false);
 
+  useEffect(() => {
+    // Check if admin exists in Firestore, if not, create it
+    const checkAdmin = async () => {
+      try {
+        const adminId = '1';
+        const adminDoc = await getDoc(doc(db, 'users', adminId));
+        if (!adminDoc.exists()) {
+          const admin: User = { 
+            id: adminId, 
+            name: 'Admin Odonto', 
+            email: 'flaviano.fcp@gmail.com', 
+            password: '123', 
+            role: 'admin' as UserRole, 
+            permissions: ['dashboard', 'patients', 'appointments', 'dentist-schedules', 'treatments', 'dentists', 'inventory', 'announcements', 'audit', 'settings', 'users'], 
+            cpf: '111.111.111-11' 
+          };
+          await setDoc(doc(db, 'users', adminId), admin);
+        }
+      } catch (error) {
+        console.error("Error checking/creating admin:", error);
+      }
+    };
+    checkAdmin();
+  }, []);
 
   const [users, setUsers] = useState<User[]>([]);
 
   const [activeTab, setActiveTab] = useState(() => {
-    const saved = sessionStorage.getItem('odonto_user');
+    const saved = localStorage.getItem('odonto_user');
     if (saved) {
       const u = JSON.parse(saved);
       if (u.role === 'patient') return 'patient-profile';
@@ -90,145 +138,15 @@ export default function App() {
 
   const [selectedDentistId, setSelectedDentistId] = useState<string>('all');
 
-  type NotificationItem = { id: string; message: string; type: 'info' | 'success'; countedForBadge?: boolean; read?: boolean; appointmentId?: string | null; createdAt?: number; showAsToast?: boolean };
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notifications, setNotifications] = useState<{ id: string; message: string; type: 'info' | 'success' }[]>([]);
   const [unseenCount, setUnseenCount] = useState(0);
-  const collectionsInitializedRef = React.useRef<Record<string, boolean>>({});
-  const [suppressInitialToasts, setSuppressInitialToasts] = useState(false);
-  // cache initial persisted notifications to avoid showing a flood of toasts on login
-  const notificationsCacheRef = React.useRef<NotificationItem[]>([]);
-  const notificationsInitializedRef = React.useRef(false);
-  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [reminderSettings, setReminderSettings] = useState({
     emailReminders: true,
     reminderHoursBefore: 24
   });
-  const finalizedAppointmentStatuses = new Set<Appointment['status']>(['completed', 'cancelled', 'Concluído', 'Cancelado', 'blocked', 'Bloqueado']);
 
-  // Helper: resolve a recorded authUid for a given app-level user id
-  const getAuthUidForUserId = (id: string): string | undefined => {
-    const u = users.find(x => x.id === id) as any;
-    if (u && u.authUid) return u.authUid;
-    const p = patients.find(x => x.id === id) as any;
-    if (p && p.authUid) return p.authUid;
-    return undefined;
-  };
-
-  // Notification helpers: centralize badge counting and auto-dismiss behavior.
-  const removeNotification = async (id: string) => {
-    // If this notification is persisted in Firestore, mark it as read there; otherwise just remove locally.
-    const n = notifications.find(x => x.id === id);
-    if (n && typeof n.read === 'boolean') {
-      try {
-        await updateDoc(doc(db, 'notifications', id), { read: true });
-      } catch (err) {
-        console.warn('Failed to mark notification as read in Firestore', err);
-      }
-      // local state will be updated by Firestore listener; provide immediate feedback
-      setNotifications(prev => prev.filter(x => x.id !== id));
-      if (n.countedForBadge) setUnseenCount(prev => Math.max(0, prev - 1));
-      return;
-    }
-
-    setNotifications(prev => {
-      const item = prev.find(n => n.id === id);
-      if (!item) return prev;
-      if (item.countedForBadge) {
-        setUnseenCount(prevCount => Math.max(0, prevCount - 1));
-      }
-      return prev.filter(n => n.id !== id);
-    });
-  };
-
-  const addNotification = async (notif: Omit<NotificationItem, 'countedForBadge'>, options: { autoDismiss?: boolean; ms?: number; persist?: boolean } = { autoDismiss: true, ms: 5000, persist: undefined }) => {
-    const counted = user?.role === 'dentist';
-    const firebaseUid = auth.currentUser?.uid;
-    let persist = typeof options.persist === 'boolean' ? options.persist : (user?.role === 'dentist');
-
-    // Only attempt Firestore persistence when there's a signed-in Firebase Auth user.
-    if (persist && !firebaseUid) {
-      console.warn('Skipping Firestore persist: no Firebase Auth user available.');
-      persist = false;
-    }
-
-    const id = notif.id || crypto.randomUUID().replace(/-/g,"").substring(0,9);
-
-    if (persist && firebaseUid) {
-      try {
-        const payload: any = {
-          userId: firebaseUid,
-          message: notif.message,
-          type: notif.type,
-          appointmentId: (notif as any).appointmentId || null,
-          read: false,
-          createdAt: notif.createdAt || Date.now()
-        };
-        await setDoc(doc(db, 'notifications', id), payload);
-
-        // If this is the initial mount for dentist, increment badge but avoid toasts
-        if (initialMountRef.current && user?.role === 'dentist') {
-          setUnseenCount(prev => prev + 1);
-          return;
-        }
-
-        // Add immediate local feedback; Firestore listener will keep state in sync.
-        setNotifications(prev => [...prev, { id, message: notif.message, type: notif.type, countedForBadge: counted, read: false, appointmentId: (notif as any).appointmentId || null, createdAt: payload.createdAt, showAsToast: true }]);
-        if (counted) setUnseenCount(prev => prev + 1);
-
-        if (options.autoDismiss) {
-          setTimeout(() => removeNotification(id), options.ms);
-        }
-        return;
-      } catch (err) {
-        console.warn('Failed to persist notification to Firestore, falling back to local', err);
-      }
-    }
-
-    const item: NotificationItem = { id, ...notif, countedForBadge: counted, showAsToast: true };
-
-    // Suppress toast popups during the first app mount (login) for dentists — keep the badge count but avoid flooding the screen with toasts.
-    if (initialMountRef.current && user?.role === 'dentist') {
-      if (counted) setUnseenCount(prev => prev + 1);
-      return;
-    }
-
-    setNotifications(prev => [...prev, item]);
-    if (counted) setUnseenCount(prev => prev + 1);
-    if (options.autoDismiss) {
-      setTimeout(() => removeNotification(item.id), options.ms);
-    }
-  };
-
-  const toggleNotificationsPanel = () => {
-    setIsNotificationsOpen(prev => {
-      const next = !prev;
-      if (next) {
-        // Opening: merge cached persisted notifications with current state without showing toasts
-        setNotifications(current => {
-          const cached = notificationsCacheRef.current.map(n => ({ ...n, showAsToast: false }));
-          const combined = [...cached, ...current.map(n => ({ ...n, showAsToast: false }))];
-          // dedupe by id
-          const map = new Map<string, NotificationItem>();
-          combined.forEach(n => map.set(n.id, n));
-          const result = Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-          return result;
-        });
-        notificationsCacheRef.current = [];
-      }
-      return next;
-    });
-  };
-
-  // Firestore Real-time Sync — reactivo ao estado de autenticação do Firebase
-  const [firebaseAuthReady, setFirebaseAuthReady] = useState(false);
+  // Firestore Real-time Sync
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, () => setFirebaseAuthReady(true));
-    return unsub;
-  }, []);
-
-  useEffect(() => {
-    if (!firebaseAuthReady) return;
-
     const collections = [
       { name: 'patients', setter: setPatients },
       { name: 'dentists', setter: setDentists },
@@ -248,7 +166,6 @@ export default function App() {
       return onSnapshot(collection(db, name), (snapshot) => {
         const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as any));
         setter(data);
-        try { collectionsInitializedRef.current[name] = true; } catch (e) {}
       }, (error) => {
         handleFirestoreError(error, OperationType.LIST, name);
       });
@@ -267,7 +184,7 @@ export default function App() {
       unsubscribes.forEach(unsub => unsub());
       unsubscribeSettings();
     };
-  }, [db, firebaseAuthReady]);
+  }, [db]);
 
   const updateReminderSettings = async (newSettings: typeof reminderSettings) => {
     try {
@@ -279,71 +196,48 @@ export default function App() {
     }
   };
 
-  const stripPassword = <T extends Record<string, any>>(obj: T): Omit<T, 'password'> => {
-    const { password, ...safe } = obj;
-    return safe;
-  };
-
-  const clearLegacyPasswords = async (id: string) => {
-    // updateDoc evita criar documentos vazios quando o doc não existe.
-    await updateDoc(doc(db, 'users', id), { password: deleteField() }).catch(() => {});
-    await updateDoc(doc(db, 'patients', id), { password: deleteField() }).catch(() => {});
-    await updateDoc(doc(db, 'dentists', id), { password: deleteField() }).catch(() => {});
-    await updateDoc(doc(db, 'attendants', id), { password: deleteField() }).catch(() => {});
-  };
-
   // Persistence
   useEffect(() => {
-    if (user) sessionStorage.setItem('odonto_user', JSON.stringify(user));
-    else sessionStorage.removeItem('odonto_user');
+    if (user) localStorage.setItem('odonto_user', JSON.stringify(user));
+    else localStorage.removeItem('odonto_user');
   }, [user]);
 
   const addUser = async (data: Omit<User, 'id'>) => {
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
-    const email = data.email.trim().toLowerCase();
-    const password = (data as any).password as string | undefined;
-
-    if (!password || password.length < 6) {
-      throw new Error('Senha deve ter pelo menos 6 caracteres para criar conta no Firebase Auth.');
-    }
-
-    const authUid = await createAuthUserWithSecondaryApp(email, password);
-    const newUser: User & { authUid?: string } = {
-      ...(stripPassword(data as any) as Omit<User, 'id'>),
+    const id = Math.random().toString(36).substr(2, 9);
+    const newUser: User = {
+      ...data,
       id,
-      email,
-      authUid,
     };
     
     try {
-      await runWithLoading(async () => {
-        await setDoc(doc(db, 'users', id), newUser);
-
-        if (newUser.role === 'attendant') {
-          const newAttendant: Attendant = {
-            id: newUser.id,
-            name: newUser.name,
-            email: newUser.email,
-            phone: newUser.phone || '',
-            createdAt: new Date().toISOString(),
-            isActive: true,
-          };
-          await setDoc(doc(db, 'attendants', id), newAttendant);
-        } else if (newUser.role === 'dentist') {
-          const newDentist: Dentist = {
-            id: newUser.id,
-            name: newUser.name,
-            email: newUser.email,
-            phone: newUser.phone || '',
-            specialty: (data as any).specialty || 'Geral',
-            cro: (data as any).cro || '00000',
-            createdAt: new Date().toISOString(),
-            isActive: true,
-          };
-          await setDoc(doc(db, 'dentists', id), newDentist);
-        }
-      });
-
+      await setDoc(doc(db, 'users', id), newUser);
+      
+      if (newUser.role === 'attendant') {
+        const newAttendant: Attendant = {
+          id: newUser.id,
+          name: newUser.name,
+          email: newUser.email,
+          phone: newUser.phone || '',
+          createdAt: new Date().toISOString(),
+          isActive: true,
+          password: newUser.password,
+        };
+        await setDoc(doc(db, 'attendants', id), newAttendant);
+      } else if (newUser.role === 'dentist') {
+        const newDentist: Dentist = {
+          id: newUser.id,
+          name: newUser.name,
+          email: newUser.email,
+          phone: newUser.phone || '',
+          specialty: (data as any).specialty || 'Geral',
+          cro: (data as any).cro || '00000',
+          createdAt: new Date().toISOString(),
+          isActive: true,
+          password: newUser.password,
+        };
+        await setDoc(doc(db, 'dentists', id), newDentist);
+      }
+      
       logAction('Criação', 'system', newUser.id, `Usuário ${newUser.name} criado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'users');
@@ -352,11 +246,9 @@ export default function App() {
 
   const deleteUser = async (id: string) => {
     try {
-      await runWithLoading(async () => {
-        await deleteDoc(doc(db, 'users', id));
-        await deleteDoc(doc(db, 'attendants', id));
-        await deleteDoc(doc(db, 'dentists', id));
-      });
+      await deleteDoc(doc(db, 'users', id));
+      await deleteDoc(doc(db, 'attendants', id));
+      await deleteDoc(doc(db, 'dentists', id));
       logAction('Exclusão', 'system', id, `Usuário excluído.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `users/${id}`);
@@ -373,39 +265,31 @@ export default function App() {
     
     // Atualização no Firebase Firestore
     try {
-      await runWithLoading(async () => {
-        const userRef = doc(db, 'users', updated.id);
-        const safeUpdated = stripPassword(updated as any);
-        await setDoc(userRef, safeUpdated, { merge: true });
-        await setDoc(userRef, { password: deleteField() }, { merge: true });
-        console.log('Usuário atualizado no Firestore com sucesso');
-
-        if ((updated as any).password && updated.email) {
-          await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
-        }
-
-        // If user is a dentist, update the dentist record too
-        if (updated.role === 'dentist') {
-          const dentistRef = doc(db, 'dentists', updated.id);
-          await setDoc(dentistRef, {
-            name: updated.name,
-            email: updated.email,
-            phone: updated.phone || '',
-            cro: (updated as any).cro,
-            specialty: (updated as any).specialty
-          }, { merge: true });
-          await setDoc(dentistRef, { password: deleteField() }, { merge: true }).catch(() => {});
-        } else if (updated.role === 'attendant') {
-          const attendantRef = doc(db, 'attendants', updated.id);
-          await setDoc(attendantRef, {
-            name: updated.name,
-            email: updated.email,
-            phone: updated.phone || '',
-          }, { merge: true });
-          await setDoc(attendantRef, { password: deleteField() }, { merge: true }).catch(() => {});
-        }
-      });
-
+      const userRef = doc(db, 'users', updated.id);
+      await setDoc(userRef, updated, { merge: true });
+      console.log('Usuário atualizado no Firestore com sucesso');
+      
+      // If user is a dentist, update the dentist record too
+      if (updated.role === 'dentist') {
+        const dentistRef = doc(db, 'dentists', updated.id);
+        await setDoc(dentistRef, {
+          name: updated.name,
+          email: updated.email,
+          phone: updated.phone || '',
+          password: updated.password,
+          cro: (updated as any).cro,
+          specialty: (updated as any).specialty
+        }, { merge: true });
+      } else if (updated.role === 'attendant') {
+        const attendantRef = doc(db, 'attendants', updated.id);
+        await setDoc(attendantRef, {
+          name: updated.name,
+          email: updated.email,
+          phone: updated.phone || '',
+          password: updated.password
+        }, { merge: true });
+      }
+      
       logAction('Edição', 'system', updated.id, `Usuário ${updated.name} atualizado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `users/${updated.id}`);
@@ -423,7 +307,7 @@ export default function App() {
 
   const logAction = async (action: string, entityType: AuditLog['entityType'], entityId?: string, details?: string) => {
     if (!user) return;
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
+    const id = Math.random().toString(36).substr(2, 9);
     const newLog: AuditLog = {
       id,
       userId: user.id,
@@ -442,183 +326,31 @@ export default function App() {
     }
   };
 
-  const resolveLegacyUserByCredentials = (email: string, password: string): (User & { authUid?: string }) | null => {
-    const normalizedEmail = email.trim().toLowerCase();
-
-    const directUser = users.find((u: any) => u.email?.toLowerCase() === normalizedEmail && u.password === password);
-    if (directUser) {
-      return stripPassword(directUser as any) as User;
-    }
-
-    const legacyDentist = dentists.find((d: any) => d.email?.toLowerCase() === normalizedEmail && d.password === password);
-    if (legacyDentist) {
-      const existingUser = users.find(u => u.id === legacyDentist.id || u.email.toLowerCase() === normalizedEmail);
-      return {
-        id: existingUser?.id || legacyDentist.id,
-        name: existingUser?.name || legacyDentist.name,
-        email: normalizedEmail,
-        role: existingUser?.role || 'dentist',
-        permissions: existingUser?.permissions || ['patients', 'appointments', 'treatments'],
-        phone: existingUser?.phone || legacyDentist.phone,
-        photoURL: existingUser?.photoURL,
-        cpf: existingUser?.cpf,
-      };
-    }
-
-    const legacyAttendant = attendants.find((a: any) => a.email?.toLowerCase() === normalizedEmail && a.password === password);
-    if (legacyAttendant) {
-      const existingUser = users.find(u => u.id === legacyAttendant.id || u.email.toLowerCase() === normalizedEmail);
-      return {
-        id: existingUser?.id || legacyAttendant.id,
-        name: existingUser?.name || legacyAttendant.name,
-        email: normalizedEmail,
-        role: existingUser?.role || 'attendant',
-        permissions: existingUser?.permissions || ['patients', 'appointments'],
-        phone: existingUser?.phone || legacyAttendant.phone,
-        photoURL: existingUser?.photoURL,
-        cpf: existingUser?.cpf,
-      };
-    }
-
-    const legacyPatient = patients.find((p: any) => p.email?.toLowerCase() === normalizedEmail && p.password === password);
-    if (legacyPatient) {
-      const existingUser = users.find(u => u.id === legacyPatient.id || u.email.toLowerCase() === normalizedEmail);
-      return {
-        id: existingUser?.id || legacyPatient.id,
-        name: existingUser?.name || legacyPatient.name,
-        email: normalizedEmail,
-        role: existingUser?.role || 'patient',
-        permissions: existingUser?.permissions || ['patient-profile'],
-        phone: existingUser?.phone || legacyPatient.phone,
-        photoURL: existingUser?.photoURL,
-        cpf: existingUser?.cpf || legacyPatient.cpf,
-      };
-    }
-
-    return null;
-  };
-
-  const canFallbackToLegacySession = (error: any) => {
-    const code = String(error?.code || '');
-    return [
-      'auth/operation-not-allowed',
-      'auth/invalid-api-key',
-      'auth/network-request-failed',
-      'auth/internal-error',
-      'auth/too-many-requests',
-      'auth/configuration-not-found',
-      'auth/recaptcha-not-enabled'
-    ].includes(code);
-  };
-
-  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleLogin = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setLoginError(null);
     const formData = new FormData(e.currentTarget);
-    const email = (formData.get('email') as string).trim().toLowerCase();
+    const email = formData.get('email') as string;
     const password = formData.get('password') as string;
-
-    try {
-      await runWithLoading(async () => {
-        let authUid = '';
-        let legacySessionUser: (User & { authUid?: string }) | null = null;
-
-        try {
-          const credential = await signInWithEmailAndPassword(auth, email, password);
-          authUid = credential.user.uid;
-        } catch (authErr: any) {
-          const legacyUser = resolveLegacyUserByCredentials(email, password);
-          if (!legacyUser) {
-            throw authErr;
-          }
-          legacySessionUser = legacyUser;
-
-          // Se Email/Senha estiver desabilitado no Firebase Auth, mantém acesso legado
-          // sem persistir flag local; evita chamadas que geram 400 no console.
-          let skipAuthMigration = false;
-          if (canFallbackToLegacySession(authErr)) {
-            console.warn('Firebase Email/Password indisponível, usando fallback legado para', email);
-            await setDoc(doc(db, 'users', legacyUser.id), { ...legacyUser }, { merge: true }).catch(() => {});
-            skipAuthMigration = true;
-          }
-
-          // Migração automática para Firebase Auth quando possível.
-          if (!skipAuthMigration && password.length >= 6) {
-            try {
-              await createAuthUserWithSecondaryApp(email, password);
-            } catch (createErr: any) {
-              if (createErr?.code !== 'auth/email-already-in-use' && !canFallbackToLegacySession(createErr)) {
-                throw createErr;
-              }
-            }
-
-            try {
-              const credential = await signInWithEmailAndPassword(auth, email, password);
-              authUid = credential.user.uid;
-              await setDoc(doc(db, 'users', legacyUser.id), { ...legacyUser, authUid }, { merge: true });
-              await clearLegacyPasswords(legacyUser.id);
-            } catch (migrationErr: any) {
-              if (!canFallbackToLegacySession(migrationErr) && !canFallbackToLegacySession(authErr)) {
-                throw migrationErr;
-              }
-              await setDoc(doc(db, 'users', legacyUser.id), { ...legacyUser }, { merge: true }).catch(() => {});
-            }
-          } else {
-            await setDoc(doc(db, 'users', legacyUser.id), { ...legacyUser }, { merge: true }).catch(() => {});
-          }
-        }
-
-        const appUser = authUid
-          ? (users.find((u: any) => u.authUid === authUid) || users.find(u => u.email.toLowerCase() === email))
-          : legacySessionUser;
-        if (!appUser) {
-          await signOut(auth).catch(() => {});
-          setLoginError('Conta autenticada, mas perfil não encontrado no sistema.');
-          return;
-        }
-
-        if (!(appUser as any).authUid) {
-          await setDoc(doc(db, 'users', appUser.id), { authUid }, { merge: true });
-        }
-
-        setUser(appUser);
-        setSessionExpired(false);
-        sessionStorage.setItem('odonto_user', JSON.stringify(appUser));
-        setActiveTab(appUser.role === 'patient' ? 'patient-profile' : appUser.role === 'dentist' ? 'dentist-appointments' : 'dashboard');
-        logAction('Login', 'system', appUser.id, `Usuário ${appUser.name} entrou no sistema.`);
-      });
-    } catch (error) {
-      console.error('Login error:', error);
+    
+    const user = users.find(u => u.email.toLowerCase() === email.toLowerCase() && u.password === password);
+    
+    if (user) {
+      setUser(user);
+      localStorage.setItem('odonto_user', JSON.stringify(user));
+      setActiveTab(user.role === 'patient' ? 'patient-profile' : user.role === 'dentist' ? 'dentist-appointments' : 'dashboard');
+      logAction('Login', 'system', user.id, `Usuário ${user.name} entrou no sistema.`);
+    } else {
       setLoginError('Credenciais incorretas.');
     }
   };
 
-  const handleLogout = async (expired = false) => {
-    if (user) logAction('Logout', 'system', user.id, expired ? `${user.name} sessão encerrada por inatividade.` : `${user.name} saiu do sistema.`);
-    await signOut(auth).catch(() => {});
+  const handleLogout = () => {
+    if (user) logAction('Logout', 'system', user.id, `${user.name} saiu do sistema.`);
     setUser(null);
-    sessionStorage.removeItem('odonto_user');
+    localStorage.removeItem('odonto_user');
     setActiveTab('dashboard');
-    if (expired) setSessionExpired(true);
   };
-
-  // Encerra sessão após 15 minutos de inatividade
-  const INACTIVITY_TIMEOUT = 15 * 60 * 1000;
-  useEffect(() => {
-    if (!user) return;
-    let timer: ReturnType<typeof setTimeout>;
-    const resetTimer = () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => handleLogout(true), INACTIVITY_TIMEOUT);
-    };
-    const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'] as const;
-    events.forEach(ev => window.addEventListener(ev, resetTimer));
-    resetTimer();
-    return () => {
-      clearTimeout(timer);
-      events.forEach(ev => window.removeEventListener(ev, resetTimer));
-    };
-  }, [user]);
 
   // Patient Handlers
   const addPatient = async (data: Omit<Patient, 'id' | 'createdAt' | 'isActive'> & { id?: string }) => {
@@ -632,7 +364,7 @@ export default function App() {
       return;
     }
     
-    const id = data.id || crypto.randomUUID().replace(/-/g,"").substring(0,9);
+    const id = data.id || Math.random().toString(36).substr(2, 9);
     const newPatient: Patient = {
       ...data,
       id,
@@ -641,36 +373,20 @@ export default function App() {
     };
 
     try {
-      await runWithLoading(async () => {
-        // If provided, create an auth user first so we can store authUid on the patient record.
-        const patientPassword = (data as any).password as string | undefined;
-        const hasEmail = !!(newPatient.email && newPatient.email.trim());
-        let authUid: string | undefined;
-
-        if (hasEmail && patientPassword && patientPassword.length >= 6) {
-          authUid = await createAuthUserWithSecondaryApp(newPatient.email.trim().toLowerCase(), patientPassword);
-        }
-
-        // include authUid on patient document when available
-        const patientWithAuth: any = { ...newPatient, ...(authUid ? { authUid } : {}) };
-        await setDoc(doc(db, 'patients', id), patientWithAuth);
-
-        // Only create a corresponding `users` document for titulars (not for dependents)
-        // This keeps the `users` collection contendo apenas os titulares.
-        if (!newPatient.dependentOf) {
-          const newUser: User & { authUid?: string } = {
-            id,
-            name: newPatient.name,
-            email: newPatient.email,
-            role: 'patient',
-            permissions: ['patient-profile'],
-            phone: newPatient.phone,
-            ...(authUid ? { authUid } : {})
-          };
-          await setDoc(doc(db, 'users', id), newUser);
-        }
-      });
-
+      await setDoc(doc(db, 'patients', id), newPatient);
+      
+      // Criar usuário correspondente para o portal do paciente
+      const newUser: User = {
+        id,
+        name: newPatient.name,
+        email: newPatient.email,
+        password: (data as any).password || Math.random().toString(36).substr(2, 8),
+        role: 'patient',
+        permissions: ['patient-profile'],
+        phone: newPatient.phone
+      };
+      await setDoc(doc(db, 'users', id), newUser);
+      
       logAction('Criação', 'patient', newPatient.id, `Paciente ${newPatient.name} criado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'patients');
@@ -679,23 +395,21 @@ export default function App() {
 
   const deletePatient = async (id: string) => {
     try {
-      await runWithLoading(async () => {
-        const patient = patients.find(p => p.id === id);
-        await deleteDoc(doc(db, 'patients', id));
-        await deleteDoc(doc(db, 'users', id));
-
-        // Delete related appointments and treatments
-        const relatedAppointments = appointments.filter(a => a.patientId === id);
-        for (const apt of relatedAppointments) {
-          await deleteDoc(doc(db, 'appointments', apt.id));
-        }
-
-        const relatedTreatments = treatments.filter(t => t.patientId === id);
-        for (const t of relatedTreatments) {
-          await deleteDoc(doc(db, 'treatments', t.id));
-        }
-        logAction('Exclusão', 'patient', id, `Paciente ${patient?.name || id} excluído.`);
-      });
+      const patient = patients.find(p => p.id === id);
+      await deleteDoc(doc(db, 'patients', id));
+      await deleteDoc(doc(db, 'users', id));
+      logAction('Exclusão', 'patient', id, `Paciente ${patient?.name || id} excluído.`);
+      
+      // Delete related appointments and treatments
+      const relatedAppointments = appointments.filter(a => a.patientId === id);
+      for (const apt of relatedAppointments) {
+        await deleteDoc(doc(db, 'appointments', apt.id));
+      }
+      
+      const relatedTreatments = treatments.filter(t => t.patientId === id);
+      for (const t of relatedTreatments) {
+        await deleteDoc(doc(db, 'treatments', t.id));
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `patients/${id}`);
     }
@@ -703,17 +417,14 @@ export default function App() {
 
   const updatePatient = async (updated: Patient) => {
     try {
-      await runWithLoading(async () => {
-        const safePatient = stripPassword(updated as any);
-        await setDoc(doc(db, 'patients', updated.id), safePatient, { merge: true });
-        await setDoc(doc(db, 'patients', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
-
-        // Em vez de persistir senha em texto, envia link de redefinição.
-        if ((updated as any).password && updated.email) {
-          await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
-          await setDoc(doc(db, 'users', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
-        }
-      });
+      await setDoc(doc(db, 'patients', updated.id), updated, { merge: true });
+      
+      // Se o paciente tiver uma senha, atualiza o usuário correspondente
+      if ((updated as any).password) {
+        await setDoc(doc(db, 'users', updated.id), {
+          password: (updated as any).password
+        }, { merge: true });
+      }
 
       logAction('Edição', 'patient', updated.id, `Paciente ${updated.name} atualizado.`);
     } catch (error) {
@@ -723,20 +434,12 @@ export default function App() {
 
   // Dentist Handlers
   const addDentist = async (data: Omit<Dentist, 'id' | 'createdAt' | 'isActive'>) => {
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
-    const password = (data as any).password as string | undefined;
-    let authUid: string | undefined;
-
-    if (password && password.length >= 6) {
-      authUid = await createAuthUserWithSecondaryApp(data.email.trim().toLowerCase(), password);
-    }
-
+    const id = Math.random().toString(36).substr(2, 9);
     const newDentist: Dentist = {
-      ...(stripPassword(data as any) as Omit<Dentist, 'id' | 'createdAt' | 'isActive'>),
+      ...data,
       id,
       createdAt: new Date().toISOString(),
-      isActive: true,
-      ...(authUid ? { authUid } : {})
+      isActive: true
     };
     try {
       await setDoc(doc(db, 'dentists', id), newDentist);
@@ -746,10 +449,10 @@ export default function App() {
         id,
         name: newDentist.name,
         email: newDentist.email,
+        password: newDentist.password,
         role: 'dentist',
         permissions: ['patients', 'appointments', 'treatments'],
-        phone: newDentist.phone,
-        ...(authUid ? { authUid } : {})
+        phone: newDentist.phone
       };
       await setDoc(doc(db, 'users', id), newUser);
       
@@ -782,21 +485,16 @@ export default function App() {
 
   const updateDentist = async (updated: Dentist) => {
     try {
-      const safeUpdated = stripPassword(updated as any);
-      await setDoc(doc(db, 'dentists', updated.id), safeUpdated, { merge: true });
-      await setDoc(doc(db, 'dentists', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
+      await setDoc(doc(db, 'dentists', updated.id), updated, { merge: true });
       
       // Atualizar usuário correspondente
       const userRef = doc(db, 'users', updated.id);
       await setDoc(userRef, {
         name: updated.name,
         email: updated.email,
+        password: updated.password,
         phone: updated.phone
       }, { merge: true });
-      await setDoc(userRef, { password: deleteField() }, { merge: true }).catch(() => {});
-      if ((updated as any).password && updated.email) {
-        await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
-      }
       
       logAction('Edição', 'dentist', updated.id, `Dentista ${updated.name} atualizado.`);
     } catch (error) {
@@ -806,20 +504,12 @@ export default function App() {
 
   // Attendant Handlers
   const addAttendant = async (data: Omit<Attendant, 'id' | 'createdAt' | 'isActive'>) => {
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
-    const password = (data as any).password as string | undefined;
-    let authUid: string | undefined;
-
-    if (password && password.length >= 6) {
-      authUid = await createAuthUserWithSecondaryApp(data.email.trim().toLowerCase(), password);
-    }
-
+    const id = Math.random().toString(36).substr(2, 9);
     const newAttendant: Attendant = {
-      ...(stripPassword(data as any) as Omit<Attendant, 'id' | 'createdAt' | 'isActive'>),
+      ...data,
       id,
       createdAt: new Date().toISOString(),
-      isActive: true,
-      ...(authUid ? { authUid } : {})
+      isActive: true
     };
     try {
       await setDoc(doc(db, 'attendants', id), newAttendant);
@@ -829,10 +519,10 @@ export default function App() {
         id,
         name: newAttendant.name,
         email: newAttendant.email,
+        password: newAttendant.password,
         role: 'attendant',
         permissions: ['patients', 'appointments'],
-        phone: newAttendant.phone,
-        ...(authUid ? { authUid } : {})
+        phone: newAttendant.phone
       };
       await setDoc(doc(db, 'users', id), newUser);
       
@@ -855,21 +545,16 @@ export default function App() {
 
   const updateAttendant = async (updated: Attendant) => {
     try {
-      const safeUpdated = stripPassword(updated as any);
-      await setDoc(doc(db, 'attendants', updated.id), safeUpdated, { merge: true });
-      await setDoc(doc(db, 'attendants', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
+      await setDoc(doc(db, 'attendants', updated.id), updated, { merge: true });
       
       // Atualizar usuário correspondente
       const userRef = doc(db, 'users', updated.id);
       await setDoc(userRef, {
         name: updated.name,
         email: updated.email,
+        password: updated.password,
         phone: updated.phone
       }, { merge: true });
-      await setDoc(userRef, { password: deleteField() }, { merge: true }).catch(() => {});
-      if ((updated as any).password && updated.email) {
-        await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
-      }
       
       logAction('Edição', 'attendant', updated.id, `Atendente ${updated.name} atualizado.`);
     } catch (error) {
@@ -878,143 +563,11 @@ export default function App() {
   };
 
   // Appointment Handlers
-  const initialMountRef = React.useRef(true);
   useEffect(() => {
-    if (initialMountRef.current) {
-      initialMountRef.current = false;
-      return;
-    }
     if (user?.role === 'dentist' && activeTab === 'dentist-appointments') {
       setUnseenCount(0);
     }
   }, [activeTab, user]);
-
-  // Limpa notificações persistidas de atraso quando o agendamento é concluído, cancelado ou removido.
-  useEffect(() => {
-    if (user?.role !== 'dentist') return;
-
-    notifications
-      .filter(notification => notification.appointmentId && notification.message.startsWith('Agendamento pendente:'))
-      .forEach((notification) => {
-        const appointment = appointments.find(item => item.id === notification.appointmentId);
-        if (!appointment || finalizedAppointmentStatuses.has(appointment.status)) {
-          void removeNotification(notification.id);
-        }
-      });
-  }, [appointments, notifications, user]);
-
-  // Firestore-backed notifications subscription for current user
-  useEffect(() => {
-    if (!user) {
-      setNotifications([]);
-      setUnseenCount(0);
-      return;
-    }
-
-    // Only subscribe when there's an authenticated Firebase user — otherwise the onSnapshot will fail with permission errors.
-    const firebaseUid = auth.currentUser?.uid;
-    if (!firebaseUid) {
-      console.warn('Skipping notifications subscription: no Firebase Auth user.');
-      setNotifications([]);
-      setUnseenCount(0);
-      setSuppressInitialToasts(false);
-      return;
-    }
-    // Reset initialization marker so per-user initial snapshot is cached.
-    notificationsInitializedRef.current = false;
-
-    try {
-      // start by suppressing initial toasts for dentists to avoid flood on login
-      if (user.role === 'dentist') setSuppressInitialToasts(true);
-
-      const q = query(collection(db, 'notifications'), where('userId', '==', firebaseUid), orderBy('createdAt', 'desc'));
-      const unsub = onSnapshot(q, (snapshot) => {
-        const docs = snapshot.docs.map(d => {
-          const data: any = d.data();
-          return {
-            id: d.id,
-            message: data.message,
-            type: data.type,
-            read: !!data.read,
-            appointmentId: data.appointmentId || null,
-            countedForBadge: !data.read,
-            createdAt: data.createdAt || 0
-          } as NotificationItem;
-        });
-
-        // First snapshot: cache persisted notifications and avoid showing toasts immediately.
-        if (!notificationsInitializedRef.current) {
-          notificationsInitializedRef.current = true;
-          notificationsCacheRef.current = docs.map(d => ({ ...d, showAsToast: false }));
-          setUnseenCount(docs.filter(x => !x.read).length);
-          if (user.role === 'dentist') setSuppressInitialToasts(true);
-          if (user.role === 'dentist') {
-            setTimeout(() => setSuppressInitialToasts(false), 800);
-          } else {
-            setSuppressInitialToasts(false);
-          }
-          return;
-        }
-
-        // Subsequent snapshots: apply only incremental changes to avoid re-triggering toasts for cached items.
-        snapshot.docChanges().forEach(change => {
-          const d = change.doc;
-          const data: any = d.data();
-          const item: NotificationItem = {
-            id: d.id,
-            message: data.message,
-            type: data.type,
-            read: !!data.read,
-            appointmentId: data.appointmentId || null,
-            countedForBadge: !data.read,
-            createdAt: data.createdAt || 0,
-            showAsToast: true
-          };
-
-          if (change.type === 'added') {
-            setNotifications(prev => {
-              if (prev.some(n => n.id === item.id)) return prev;
-              return [...prev, { ...item, showAsToast: true }];
-            });
-            if (!item.read) setUnseenCount(prev => prev + 1);
-          } else if (change.type === 'modified') {
-            setNotifications(prev => prev.map(n => n.id === item.id ? { ...n, ...item, showAsToast: false } : n));
-          } else if (change.type === 'removed') {
-            setNotifications(prev => prev.filter(n => n.id !== item.id));
-          }
-        });
-      }, (err) => {
-        console.warn('notifications snapshot error', err);
-      });
-
-      return () => {
-        unsub();
-        setSuppressInitialToasts(false);
-      };
-    } catch (e) {
-      console.warn('Failed to subscribe to notifications', e);
-    }
-  }, [user]);
-
-  const markAllNotificationsRead = async () => {
-    if (!user) return;
-    const firebaseUid = auth.currentUser?.uid;
-    if (!firebaseUid) {
-      // If not authenticated with Firebase Auth, mark local state as read and clear unseen count.
-      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-      setUnseenCount(0);
-      return;
-    }
-
-    try {
-      const q = query(collection(db, 'notifications'), where('userId', '==', firebaseUid), where('read', '==', false));
-      const snap = await getDocs(q);
-      await Promise.all(snap.docs.map(d => updateDoc(doc(db, 'notifications', d.id), { read: true })));
-      setUnseenCount(0);
-    } catch (err) {
-      console.warn('Failed to mark all notifications read', err);
-    }
-  };
 
   const addAppointment = async (data: Omit<Appointment, 'id' | 'createdAt'>) => {
     // Conflict detection
@@ -1022,102 +575,53 @@ export default function App() {
       a.dentistId === data.dentistId && 
       a.date === data.date && 
       a.time === data.time &&
-      a.status !== 'cancelled' &&
-      a.status !== 'Cancelado'
+      a.status !== 'cancelled'
     );
 
     if (conflict) {
       const newNotification = {
-        id: crypto.randomUUID().replace(/-/g,"").substring(0,9),
+        id: Math.random().toString(36).substr(2, 9),
         message: `Conflito de horário: Este dentista já possui um agendamento para este horário.`,
         type: 'info' as const
       };
-      addNotification(newNotification);
+      setNotifications(prev => [...prev, newNotification]);
+      setTimeout(() => {
+        setNotifications(prev => prev.filter(n => n.id !== newNotification.id));
+      }, 5000);
       return;
     }
 
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
-    const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
-    const dentistAuthUid = getAuthUidForUserId(data.dentistId)
-      || (user?.role === 'dentist' && user.id === data.dentistId ? auth.currentUser?.uid ?? null : null);
-    const patient = patients.find(p => p.id === data.patientId);
-    const patientName = patient?.name || 'Paciente';
-
+    const id = Math.random().toString(36).substr(2, 9);
     const newApt: Appointment = {
       ...data,
       id,
-      createdAt: new Date().toISOString(),
-      patientAuthUid,
-      dentistAuthUid
+      createdAt: new Date().toISOString()
     };
     
     try {
-      const batch = writeBatch(db);
-      batch.set(doc(db, 'appointments', id), newApt);
-
-      if (data.status !== 'blocked' && data.status !== 'Bloqueado' && dentistAuthUid) {
-        const notificationId = crypto.randomUUID().replace(/-/g,"").substring(0,9);
-        batch.set(doc(db, 'notifications', notificationId), {
-          userId: dentistAuthUid,
-          message: `Novo agendamento: ${patientName} às ${data.time}`,
-          type: 'success',
-          appointmentId: id,
-          createdAt: Date.now(),
-          read: false,
-        });
-      }
-
-      await batch.commit();
-      logAction(data.status === 'blocked' ? 'Bloqueio de Horário' : 'Criação', 'appointment', newApt.id, `Agendamento para ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}.`);
+      await setDoc(doc(db, 'appointments', id), newApt);
+      logAction(data.status === 'blocked' ? 'Bloqueio de Horário' : 'Criação', 'appointment', newApt.id, `Agendamento para ${new Date(data.date).toLocaleDateString('pt-BR')} às ${data.time}.`);
 
       // Email notification
-      const dentist = dentists.find(d => d.id === data.dentistId);
-      const dentistName = dentist?.name || '';
+      const patient = patients.find(p => p.id === data.patientId);
       if (patient && data.status !== 'blocked') {
-        // Fallback: se dependente não tiver e-mail, usa o e-mail do titular
-        let notifyEmail = patient.email && String(patient.email).trim() !== '' ? patient.email : '';
-        if (!notifyEmail && patient.dependentOf) {
-          const titular = patients.find(p => p.id === patient.dependentOf);
-          if (titular?.email && String(titular.email).trim() !== '') notifyEmail = titular.email;
-        }
-
-        if (notifyEmail) {
-          try {
-            emailService.sendAppointmentEmail(
-              notifyEmail,
-              'Novo Agendamento',
-              `Olá ${patient.name}, seu agendamento foi marcado para ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}.\nDentista: ${dentistName}`
-            );
-          } catch (e) {
-            console.error('Falha ao enviar e-mail de agendamento', e);
-          }
-        } else {
-          const noEmailNotif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: `Paciente não possui e-mail cadastrado — notificação por e-mail não enviada.`, type: 'info' as const };
-          addNotification(noEmailNotif);
-        }
-
-        const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Agendamento criado.', type: 'success' as const };
-        addNotification(notif);
-        // Mostrar confirmação na tela do paciente quando o agendamento for criado por ele
-        if (user?.role === 'patient' && user.id === data.patientId) {
-          const patientNotif = {
-            id: crypto.randomUUID().replace(/-/g,"").substring(0,9),
-            message: `Agendamento confirmado para ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}.`,
-            type: 'success' as const
-          };
-          addNotification(patientNotif);
-        }
+        emailService.sendAppointmentEmail(
+          patient.email,
+          'Confirmação de Agendamento',
+          `Olá ${patient.name}, seu agendamento foi confirmado para ${new Date(data.date).toLocaleDateString('pt-BR')} às ${data.time}.`
+        );
       }
 
-      // Request server to sync this appointment to connected Google Calendars
-      try {
-        await fetch('/api/sync-appointment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ appointment: newApt })
-        });
-      } catch (syncErr) {
-        console.warn('Failed to request calendar sync', syncErr);
+      // Notification logic
+      if (user?.role === 'dentist' && data.dentistId === user.id) {
+        const patientName = patients.find(p => p.id === data.patientId)?.name || 'Paciente';
+        const newNotification = {
+          id: Math.random().toString(36).substr(2, 9),
+          message: `Novo agendamento: ${patientName} em ${new Date(data.date).toLocaleDateString('pt-BR')} às ${data.time}`,
+          type: 'success' as const
+        };
+        setNotifications(prev => [...prev, newNotification]);
+        setUnseenCount(prev => prev + 1);
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'appointments');
@@ -1128,16 +632,6 @@ export default function App() {
     try {
       await updateDoc(doc(db, 'appointments', id), { status });
       logAction('Atualização de Status', 'appointment', id, `Status do agendamento alterado para ${status}.`);
-      // Trigger calendar sync for this appointment (use local cache to get details)
-      try {
-        const apt = appointments.find(a => a.id === id);
-        if (apt) {
-          const syncApt = { ...apt, status };
-          await fetch('/api/sync-appointment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appointment: syncApt }) });
-        }
-      } catch (syncErr) {
-        console.warn('Failed to request calendar sync on status update', syncErr);
-      }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `appointments/${id}`);
     }
@@ -1145,35 +639,17 @@ export default function App() {
 
   const updateAppointment = async (updatedAppointment: Appointment) => {
     try {
-      const patientAuthUid = updatedAppointment.patientAuthUid || getAuthUidForUserId(updatedAppointment.patientId) || null;
-      const dentistAuthUid = updatedAppointment.dentistAuthUid || getAuthUidForUserId(updatedAppointment.dentistId) || null;
-      await setDoc(doc(db, 'appointments', updatedAppointment.id), { ...updatedAppointment, patientAuthUid, dentistAuthUid }, { merge: true });
-      logAction('Edição', 'appointment', updatedAppointment.id, `Agendamento para ${parseDate(updatedAppointment.date).toLocaleDateString('pt-BR')} às ${updatedAppointment.time} atualizado.`);
+      await setDoc(doc(db, 'appointments', updatedAppointment.id), updatedAppointment, { merge: true });
+      logAction('Edição', 'appointment', updatedAppointment.id, `Agendamento para ${new Date(updatedAppointment.date).toLocaleDateString('pt-BR')} às ${updatedAppointment.time} atualizado.`);
       
       // Email notification
       const patient = patients.find(p => p.id === updatedAppointment.patientId);
-      const dentist = dentists.find(d => d.id === updatedAppointment.dentistId);
-      const dentistName = dentist?.name || '';
       if (patient) {
-        // Fallback: dependente herda e-mail do titular quando necessário
-        let notifyEmail = patient.email && String(patient.email).trim() !== '' ? patient.email : '';
-        if (!notifyEmail && patient.dependentOf) {
-          const titular = patients.find(p => p.id === patient.dependentOf);
-          if (titular?.email && String(titular.email).trim() !== '') notifyEmail = titular.email;
-        }
-        if (notifyEmail) {
-          emailService.sendAppointmentEmail(
-            notifyEmail,
-            'Atualização de Agendamento',
-            `Olá ${patient.name}, seu agendamento foi atualizado para ${parseDate(updatedAppointment.date).toLocaleDateString('pt-BR')} às ${updatedAppointment.time}.\nDentista: ${dentistName}`
-          );
-        }
-      }
-      // Request server to sync updated appointment
-      try {
-        await fetch('/api/sync-appointment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appointment: updatedAppointment }) });
-      } catch (syncErr) {
-        console.warn('Failed to request calendar sync on update', syncErr);
+        emailService.sendAppointmentEmail(
+          patient.email,
+          'Atualização de Agendamento',
+          `Olá ${patient.name}, seu agendamento foi atualizado para ${new Date(updatedAppointment.date).toLocaleDateString('pt-BR')} às ${updatedAppointment.time}.`
+        );
       }
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `appointments/${updatedAppointment.id}`);
@@ -1197,13 +673,11 @@ export default function App() {
 
   // Treatment Handlers
   const addTreatment = async (data: Omit<Treatment, 'id' | 'createdAt'>) => {
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
-    const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
+    const id = Math.random().toString(36).substr(2, 9);
     const newTreatment: Treatment = {
       ...data,
       id,
-      createdAt: new Date().toISOString(),
-      patientAuthUid
+      createdAt: new Date().toISOString()
     };
     try {
       await setDoc(doc(db, 'treatments', id), newTreatment);
@@ -1215,8 +689,7 @@ export default function App() {
 
   const updateTreatment = async (updatedTreatment: Treatment) => {
     try {
-      const patientAuthUid = updatedTreatment.patientAuthUid || getAuthUidForUserId(updatedTreatment.patientId) || null;
-      await setDoc(doc(db, 'treatments', updatedTreatment.id), { ...updatedTreatment, patientAuthUid }, { merge: true });
+      await setDoc(doc(db, 'treatments', updatedTreatment.id), updatedTreatment, { merge: true });
       logAction('Edição', 'treatment', updatedTreatment.id, `Tratamento ${updatedTreatment.description} atualizado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `treatments/${updatedTreatment.id}`);
@@ -1224,13 +697,11 @@ export default function App() {
   };
 
   const addDocument = async (data: Omit<PatientDocument, 'id' | 'uploadedAt'>) => {
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
-    const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
+    const id = Math.random().toString(36).substr(2, 9);
     const newDoc: PatientDocument = {
       ...data,
       id,
-      uploadedAt: new Date().toISOString(),
-      patientAuthUid
+      uploadedAt: new Date().toISOString()
     };
     try {
       await setDoc(doc(db, 'documents', id), newDoc);
@@ -1245,19 +716,6 @@ export default function App() {
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [forgotPasswordEmail, setForgotPasswordEmail] = useState('');
   const [forgotPasswordCpf, setForgotPasswordCpf] = useState('');
-
-  const formatCPF = (value: string) => {
-    const digits = (value || '').replace(/\D/g, '').slice(0, 11);
-    if (!digits) return '';
-    if (digits.length <= 3) return digits;
-    if (digits.length <= 6) return `${digits.slice(0,3)}.${digits.slice(3)}`;
-    if (digits.length <= 9) return `${digits.slice(0,3)}.${digits.slice(3,6)}.${digits.slice(6)}`;
-    return `${digits.slice(0,3)}.${digits.slice(3,6)}.${digits.slice(6,9)}-${digits.slice(9,11)}`;
-  };
-
-  const handleForgotPasswordCpfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setForgotPasswordCpf(formatCPF(e.target.value));
-  };
 
   useEffect(() => {
     const handleOpenProfile = () => setIsProfileEditOpen(true);
@@ -1327,148 +785,41 @@ export default function App() {
   };
 
   const handleForgotPassword = async () => {
-    const email = (forgotPasswordEmail || '').trim().toLowerCase();
-    const cpf = (forgotPasswordCpf || '').replace(/\D/g, '');
-
-    if (!email || !cpf) {
-      alert('Preencha o e-mail e o CPF para recuperar a senha.');
-      return;
-    }
-
-    // Busca localmente — evita depender do Firestore server-side (Admin SDK sem service account).
-    let userToUpdate: any = users.find(
-      (u: any) => u.email && u.email.toLowerCase() === email && u.cpf && u.cpf.replace(/\D/g, '') === cpf
-    );
-    if (!userToUpdate) {
-      const patientMatch = patients.find(
-        (p: any) => p.email && p.email.toLowerCase() === email && p.cpf && p.cpf.replace(/\D/g, '') === cpf
-      );
-      if (patientMatch) {
-        userToUpdate = users.find((u: any) => u.id === patientMatch.id) ||
-          { id: patientMatch.id, email: patientMatch.email, name: patientMatch.name };
+    const userToUpdate = users.find(u => u.email.toLowerCase() === forgotPasswordEmail.toLowerCase() && u.cpf === forgotPasswordCpf);
+    if (userToUpdate) {
+      const newPassword = Math.random().toString(36).substr(2, 8);
+      
+      try {
+        await updateDoc(doc(db, 'users', userToUpdate.id), { password: newPassword });
+        
+        emailService.sendPasswordResetEmail(userToUpdate.email, newPassword);
+        alert('Uma nova senha foi enviada para o seu e-mail.');
+        setIsForgotPasswordOpen(false);
+        setForgotPasswordEmail('');
+        setForgotPasswordCpf('');
+      } catch (error) {
+        handleFirestoreError(error, OperationType.WRITE, `users/${userToUpdate.id}`);
       }
-    }
-
-    if (!userToUpdate) {
-      // Mensagem genérica para não revelar se o e-mail existe.
-      alert('Se o e-mail e CPF corresponderem a uma conta, você receberá um link de recuperação de senha em instantes.');
-      setIsForgotPasswordOpen(false);
-      setForgotPasswordEmail('');
-      setForgotPasswordCpf('');
-      return;
-    }
-
-    try {
-      await runWithLoading(async () => {
-        // Gera token no cliente e escreve no Firestore via client SDK (não depende de Admin SDK).
-        const token = crypto.randomUUID();
-        const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hora
-
-        await setDoc(doc(db, 'users', userToUpdate.id), {
-          passwordResetToken: token,
-          passwordResetExpires: expiresAt,
-        }, { merge: true });
-
-        const origin = window.location.origin;
-        const resetLink = `${origin}/?resetToken=${token}&uid=${userToUpdate.id}`;
-
-        // Envia e-mail via servidor (nodemailer).
-        await emailService.sendPasswordResetEmail(
-          String(userToUpdate.email).toLowerCase(),
-          resetLink,
-          userToUpdate.name || ''
-        );
-      });
-
-      alert('Se o e-mail e CPF corresponderem a uma conta, você receberá um link de recuperação de senha em instantes. Verifique sua caixa de entrada e a pasta de spam.');
-      setIsForgotPasswordOpen(false);
-      setForgotPasswordEmail('');
-      setForgotPasswordCpf('');
-    } catch (error: any) {
-      console.error('handleForgotPassword error:', error);
-      alert(error?.message || 'Ocorreu um erro. Tente novamente.');
-    }
-  };
-
-  // Reset via link: modal and handler
-  const [isResetPasswordOpen, setIsResetPasswordOpen] = useState(false);
-  const [resetToken, setResetToken] = useState('');
-  const [resetUid, setResetUid] = useState('');
-  const [resetNewPassword, setResetNewPassword] = useState('');
-  const [resetConfirmPassword, setResetConfirmPassword] = useState('');
-
-  useEffect(() => {
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const token = params.get('resetToken');
-      const uid = params.get('uid');
-      if (token && uid) {
-        setResetToken(token);
-        setResetUid(uid);
-        setIsResetPasswordOpen(true);
-        // limpa os params da URL para não reaparecer o modal
-        window.history.replaceState({}, document.title, window.location.pathname);
-      }
-    } catch (e) {}
-  }, []);
-
-  const handleCompleteReset = async () => {
-    if (resetNewPassword !== resetConfirmPassword) {
-      alert('As senhas não conferem.');
-      return;
-    }
-
-    try {
-      const userSnap = await getDoc(doc(db, 'users', resetUid));
-      if (!userSnap.exists()) {
-        alert('Token inválido ou usuário não encontrado.');
-        return;
-      }
-      const data = userSnap.data() as any;
-      if (!data.passwordResetToken || data.passwordResetToken !== resetToken) {
-        alert('Token inválido.');
-        return;
-      }
-      if (!data.passwordResetExpires || data.passwordResetExpires < Date.now()) {
-        alert('Token expirado.');
-        return;
-      }
-
-      await setDoc(doc(db, 'users', resetUid), { password: resetNewPassword, passwordResetToken: '', passwordResetExpires: null }, { merge: true });
-      await updateDoc(doc(db, 'patients', resetUid), { password: resetNewPassword }).catch(() => {});
-      await updateDoc(doc(db, 'dentists', resetUid), { password: resetNewPassword }).catch(() => {});
-      await updateDoc(doc(db, 'attendants', resetUid), { password: resetNewPassword }).catch(() => {});
-
-      alert('Senha redefinida com sucesso. Você já pode entrar usando a nova senha.');
-      setIsResetPasswordOpen(false);
-      setResetNewPassword('');
-      setResetConfirmPassword('');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `users/${resetUid}`);
+    } else {
+      alert('Usuário não encontrado ou CPF incorreto.');
     }
   };
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-emerald-800 flex items-center justify-center p-4">
-        {globalLoading && <LoadingOverlay />}
+      <div className="min-h-screen bg-zinc-50 flex items-center justify-center p-4">
         <Card className="w-full max-w-md border-none shadow-2xl">
           <CardHeader className="space-y-4 text-center pb-8">
-            <div className="mx-auto h-24 w-24 rounded-2xl flex items-center justify-center">
-              <img src="/brasao-BM.png" alt="Logo Bravo Odonto" className="h-20 w-20 object-contain" />
+            <div className="mx-auto h-16 w-16 rounded-2xl bg-emerald-500 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+              <Stethoscope className="h-10 w-10 text-white" />
             </div>
             <div className="space-y-1">
-              <CardTitle className="text-2xl font-bold tracking-tight">Diretoria de Saúde</CardTitle>
+              <CardTitle className="text-2xl font-bold tracking-tight">OdontoClinic</CardTitle>
               <CardDescription>Entre com suas credenciais para acessar o sistema</CardDescription>
             </div>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleLogin} className="space-y-4">
-              {sessionExpired && (
-                <div className="p-3 rounded-lg bg-amber-50 text-amber-700 text-sm border border-amber-200 text-center">
-                  Sua sessão foi encerrada por inatividade. Faça login novamente.
-                </div>
-              )}
               {loginError && (
                 <div className="p-3 rounded-lg bg-red-50 text-red-600 text-sm border border-red-100 text-center">
                   {loginError}
@@ -1509,22 +860,19 @@ export default function App() {
                 Entrar no Sistema
               </Button>
               
-              </form>
+              <div className="mt-6 p-4 rounded-xl bg-zinc-50 border border-zinc-100">
+                <p className="text-xs font-semibold text-zinc-500 mb-2 uppercase tracking-wider">Credenciais de Admin:</p>
+                <p className="text-xs text-zinc-400"><b>Email:</b> admin@odonto.com | <b>Senha:</b> 123</p>
+              </div>
+            </form>
           </CardContent>
         </Card>
 
-        <Modal isOpen={isForgotPasswordOpen} onClose={() => setIsForgotPasswordOpen(false)} title="Recuperar Senha" closeOnBackdropClick={false}>
+        <Modal isOpen={isForgotPasswordOpen} onClose={() => setIsForgotPasswordOpen(false)} title="Recuperar Senha">
           <div className="space-y-4">
             <Input label="Email" type="email" value={forgotPasswordEmail} onChange={(e) => setForgotPasswordEmail(e.target.value)} />
-            <Input label="CPF" type="text" value={forgotPasswordCpf} onChange={handleForgotPasswordCpfChange} />
+            <Input label="CPF" type="text" value={forgotPasswordCpf} onChange={(e) => setForgotPasswordCpf(e.target.value)} />
             <Button onClick={handleForgotPassword} className="w-full">Enviar nova senha</Button>
-          </div>
-        </Modal>
-        <Modal isOpen={isResetPasswordOpen} onClose={() => setIsResetPasswordOpen(false)} title="Redefinir Senha" closeOnBackdropClick={false}>
-          <div className="space-y-4">
-            <Input label="Nova senha" type="password" value={resetNewPassword} onChange={(e) => setResetNewPassword(e.target.value)} />
-            <Input label="Confirme a nova senha" type="password" value={resetConfirmPassword} onChange={(e) => setResetConfirmPassword(e.target.value)} />
-            <Button onClick={handleCompleteReset} className="w-full">Redefinir senha</Button>
           </div>
         </Modal>
       </div>
@@ -1539,7 +887,6 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen bg-zinc-50">
-      {globalLoading && <LoadingOverlay />}
       {user && (
         <ProfileEditModal 
           isOpen={isProfileEditOpen} 
@@ -1576,7 +923,7 @@ export default function App() {
 
       {/* Toast Notifications */}
       <div className="fixed top-4 right-4 z-[100] space-y-2 pointer-events-none">
-        {!suppressInitialToasts && notifications.filter(n => n.showAsToast).map(n => (
+        {notifications.map(n => (
           <div 
             key={n.id} 
             className="pointer-events-auto flex items-center gap-3 bg-white border border-emerald-100 shadow-xl rounded-2xl p-4 min-w-[320px] animate-in slide-in-from-right duration-300"
@@ -1589,7 +936,7 @@ export default function App() {
               <p className="text-xs text-zinc-500">{n.message}</p>
             </div>
             <button 
-              onClick={() => removeNotification(n.id)}
+              onClick={() => setNotifications(prev => prev.filter(notif => notif.id !== n.id))}
               className="text-zinc-400 hover:text-zinc-600"
             >
               <XCircle className="h-4 w-4" />
@@ -1610,58 +957,6 @@ export default function App() {
               dentists={dentists}
               treatments={treatments}
               onUpdateProfile={updatePatient}
-              onConfirmAppointment={async (id: string) => {
-                try {
-                  await updateAppointmentStatus(id, 'confirmed');
-                  const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Agendamento confirmado com sucesso.', type: 'success' as const };
-                  addNotification(notif);
-                } catch (err) {
-                  const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Falha ao confirmar agendamento.', type: 'info' as const };
-                  addNotification(notif);
-                  console.error('Confirm appointment error', err);
-                }
-              }}
-              onCancelAppointment={async (id: string) => {
-                try {
-                  await updateAppointmentStatus(id, 'cancelled');
-
-                  // Envia email automático de cancelamento ao paciente (usa titular caso dependente não tenha e-mail)
-                  const apt = appointments.find(a => a.id === id);
-                  if (apt) {
-                    const patient = patients.find(p => p.id === apt.patientId);
-                    const dentist = dentists.find(d => d.id === apt.dentistId);
-                    let patientEmail = patient?.email && String(patient.email).trim() !== '' ? patient!.email : undefined;
-                    if (!patientEmail && patient?.dependentOf) {
-                      const titular = patients.find(p => p.id === patient.dependentOf);
-                      if (titular?.email && String(titular.email).trim() !== '') patientEmail = titular.email;
-                    }
-
-                    const subject = 'Cancelamento de Agendamento - Bravo Odonto';
-                    const dateStr = apt ? parseDate(apt.date).toLocaleDateString('pt-BR') : '';
-                    const timeStr = apt ? apt.time : '';
-                    const dentistName = dentist?.name || '';
-                    const details = `Olá ${patient?.name || 'Paciente'},\n\nInformamos que seu agendamento para ${dateStr} às ${timeStr} com ${dentistName} foi cancelado.\n\nCaso queira reagendar, acesse o portal do paciente ou entre em contato conosco.`;
-
-                    if (patientEmail) {
-                      try {
-                        emailService.sendAppointmentEmail(patientEmail, subject, details);
-                      } catch (e) {
-                        console.error('Falha ao enviar e-mail de cancelamento', e);
-                      }
-                    } else {
-                      const noEmailNotif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: `Paciente não possui e-mail cadastrado — notificação de cancelamento não enviada.`, type: 'info' as const };
-                      addNotification(noEmailNotif);
-                    }
-                  }
-
-                  const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Agendamento cancelado.', type: 'info' as const };
-                  addNotification(notif);
-                } catch (err) {
-                  const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Falha ao cancelar agendamento.', type: 'info' as const };
-                  addNotification(notif);
-                  console.error('Cancel appointment error', err);
-                }
-              }}
             />
           ) : isDentist ? (
             <DentistPortal 
@@ -1678,13 +973,8 @@ export default function App() {
               onUpdateTreatment={updateTreatment}
               onAddDocument={addDocument}
               onUpdateAppointmentStatus={updateAppointmentStatus}
-              unseenCount={unseenCount}
-              setUnseenCount={setUnseenCount}
-              markAllNotificationsRead={markAllNotificationsRead}
               notifications={notifications}
-              isNotificationsOpen={isNotificationsOpen}
-              toggleNotificationsPanel={toggleNotificationsPanel}
-              removeNotification={removeNotification}
+              setNotifications={setNotifications}
             />
           ) : (
             <>
@@ -1705,7 +995,6 @@ export default function App() {
                   onAddPatient={addPatient}
                   onDeletePatient={deletePatient}
                   onUpdatePatient={updatePatient}
-                  onTabChange={setActiveTab}
                 />
               )}
               {activeTab === 'appointments' && (
@@ -1818,7 +1107,6 @@ export default function App() {
                   onAddAttendant={addAttendant}
                   onDeleteAttendant={deleteAttendant}
                   onUpdateAttendant={updateAttendant}
-                  onTabChange={setActiveTab}
                 />
               )}
               {activeTab === 'treatments' && (

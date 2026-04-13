@@ -1,9 +1,0 @@
-server.ts
-_cleanup/
-tmp/
-data.json
-firebase-blueprint.json
-*.log
-node_modules/
-dist-server/
-dist-server/**

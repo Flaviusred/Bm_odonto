@@ -30,7 +30,6 @@ export interface Patient {
   city?: string;
   state?: string;
   anamnesis?: string;
-  authUid?: string;
   createdAt: string;
   isActive: boolean;
   patientType: PatientType;
@@ -49,9 +48,9 @@ export interface Dentist {
   specialty: string;
   cro: string;
   createdAt: string;
+  googleTokens?: any;
   isActive: boolean;
   password?: string;
-  authUid?: string;
 }
 
 export interface Attendant {
@@ -62,7 +61,6 @@ export interface Attendant {
   createdAt: string;
   isActive: boolean;
   password?: string;
-  authUid?: string;
 }
 
 export interface Appointment {
@@ -71,23 +69,10 @@ export interface Appointment {
   dentistId: string;
   date: string;
   time: string;
-  // Aceita formas em Português e Inglês para compatibilidade com diferentes partes da UI
-  status:
-    | 'Agendado'
-    | 'Confirmado'
-    | 'Cancelado'
-    | 'Concluído'
-    | 'Bloqueado'
-    | 'scheduled'
-    | 'confirmed'
-    | 'cancelled'
-    | 'completed'
-    | 'blocked';
+  status: 'scheduled' | 'confirmed' | 'cancelled' | 'completed' | 'blocked';
   notes?: string;
   createdAt: string;
   googleEventId?: string;
-  patientAuthUid?: string | null;
-  dentistAuthUid?: string | null;
 }
 
 export interface Treatment {
@@ -96,20 +81,18 @@ export interface Treatment {
   dentistId: string;
   appointmentId: string;
   description: string;
-  type?: 'Limpeza' | 'Extração' | 'Obturação' | 'Canal' | 'Ortodontia' | 'Outro';
+  type?: 'cleaning' | 'extraction' | 'filling' | 'root-canal' | 'orthodontics' | 'other';
   date: string;
   createdAt: string;
-  patientAuthUid?: string | null;
 }
 
 export interface PatientDocument {
   id: string;
   patientId: string;
   name: string;
-  type: 'Exame' | 'Documento' | 'Raio-X';
+  type: 'exam' | 'document' | 'x-ray';
   url: string;
   uploadedAt: string;
-  patientAuthUid?: string | null;
 }
 
 export interface InventoryItem {
@@ -126,8 +109,7 @@ export interface InventoryMovement {
   id: string;
   itemId: string;
   itemName: string;
-  // Aceita 'entrada'/'saida' (português) e 'in'/'out' (inglês)
-  type: 'entrada' | 'saida' | 'in' | 'out';
+  type: 'in' | 'out';
   quantity: number;
   reason: string;
   date: string;

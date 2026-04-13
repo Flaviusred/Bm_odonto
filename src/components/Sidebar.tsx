@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Button } from './Button';
-import { useState, useRef, useEffect } from 'react';
+import { useState } from 'react';
 import { User } from '../types';
 
 interface SidebarProps {
@@ -31,25 +31,15 @@ export function Sidebar({ activeTab, onTabChange, onLogout, user }: SidebarProps
   const [isOpen, setIsOpen] = useState(false);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
-
-  useEffect(() => {
-    // After toggling settings, restore focus to the settings button (deferred)
-    if (settingsButtonRef.current) {
-      setTimeout(() => {
-        try { settingsButtonRef.current?.focus(); } catch {}
-      }, 0);
-    }
-  }, [isSettingsOpen]);
 
   const adminItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-    { id: 'dentists', label: 'Dentistas', icon: UserRound },
     { id: 'patients', label: 'Pacientes', icon: Users },
-    { id: 'attendants', label: 'Atendentes', icon: UserRound },
-    { id: 'treatments', label: 'Tratamentos', icon: Stethoscope },
     { id: 'appointments', label: 'Agendamentos', icon: Calendar },
     { id: 'dentist-schedules', label: 'Gestão de Agenda', icon: CalendarPlus },
+    { id: 'treatments', label: 'Tratamentos', icon: Stethoscope },
+    { id: 'dentists', label: 'Dentistas', icon: UserRound },
+    { id: 'attendants', label: 'Atendentes', icon: UserRound },
     { id: 'inventory', label: 'Estoque', icon: Package },
     { id: 'announcements', label: 'Avisos', icon: Bell },
     { id: 'audit', label: 'Histórico', icon: History },
@@ -82,64 +72,6 @@ export function Sidebar({ activeTab, onTabChange, onLogout, user }: SidebarProps
           ? dentistItems 
           : adminItems;
 
-  // Agrupamento visual para o menu do admin
-  const groupedAdmin = [
-    {
-      title: 'Principal',
-      items: [
-        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'dentists', label: 'Dentistas', icon: UserRound },
-        { id: 'patients', label: 'Pacientes', icon: Users },
-        { id: 'attendants', label: 'Atendentes', icon: UserRound },
-        { id: 'treatments', label: 'Tratamentos', icon: Stethoscope },
-        { id: 'appointments', label: 'Agendamentos', icon: Calendar },
-        { id: 'dentist-schedules', label: 'Gestão de Agenda', icon: CalendarPlus },
-      ]
-    },
-    {
-      title: 'Auxiliares',
-      items: [
-        { id: 'inventory', label: 'Estoque', icon: Package },
-        { id: 'announcements', label: 'Avisos', icon: Bell },
-        { id: 'audit', label: 'Histórico', icon: History },
-      ]
-    }
-  ];
-
-  const renderNavButton = (item: { id: string; label: string; icon: any }) => (
-    <button
-      type="button"
-      key={item.id}
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={() => {
-        onTabChange(item.id);
-        setIsOpen(false);
-      }}
-      className={cn(
-        'w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group relative',
-        activeTab === item.id
-          ? 'bg-emerald-500/10 text-emerald-400 font-medium'
-          : 'hover:bg-zinc-900 hover:text-zinc-200'
-      )}
-    >
-      <div className="flex items-center gap-3">
-        <item.icon className={cn(
-          'h-5 w-5 transition-colors',
-          activeTab === item.id ? 'text-emerald-400' : 'text-zinc-500 group-hover:text-zinc-300'
-        )} />
-        <span className="text-sm">{item.label}</span>
-      </div>
-      {activeTab === item.id && (
-        <div className="absolute left-0 w-1 h-6 bg-emerald-500 rounded-r-full" />
-      )}
-      {item.id === 'dentist-appointments' && user?.role === 'dentist' && (user as any).unseenCount > 0 && (
-        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-white shadow-lg shadow-emerald-500/40">
-          {(user as any).unseenCount}
-        </span>
-      )}
-    </button>
-  );
-
   const NavContent = () => (
     <div className="flex flex-col h-full bg-zinc-950 text-zinc-400 p-4 border-r border-zinc-800/50">
       <div className="flex items-center gap-3 px-2 py-6 mb-8">
@@ -153,35 +85,42 @@ export function Sidebar({ activeTab, onTabChange, onLogout, user }: SidebarProps
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto pr-2 custom-scrollbar">
-        {user?.role === 'admin' ? (
-          <>
-            {groupedAdmin.map((group) => (
-              <div key={group.title} className="mb-4">
-                <div className="px-4 text-xs font-semibold text-zinc-500 uppercase tracking-wide">{group.title}</div>
-                <div className="mt-1 space-y-1">
-                  {group.items.map((item) => renderNavButton(item))}
-                </div>
-              </div>
-            ))}
-          </>
-        ) : (
-          <>
-            {menuItems.map((item) => renderNavButton(item))}
-          </>
-        )}
-
+        {menuItems.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => {
+              onTabChange(item.id);
+              setIsOpen(false);
+            }}
+            className={cn(
+              'w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 group relative',
+              activeTab === item.id 
+                ? 'bg-emerald-500/10 text-emerald-400 font-medium' 
+                : 'hover:bg-zinc-900 hover:text-zinc-200'
+            )}
+          >
+            <div className="flex items-center gap-3">
+              <item.icon className={cn(
+                'h-5 w-5 transition-colors',
+                activeTab === item.id ? 'text-emerald-400' : 'text-zinc-500 group-hover:text-zinc-300'
+              )} />
+              <span className="text-sm">{item.label}</span>
+            </div>
+            {activeTab === item.id && (
+              <div className="absolute left-0 w-1 h-6 bg-emerald-500 rounded-r-full" />
+            )}
+            {item.id === 'dentist-appointments' && user?.role === 'dentist' && (user as any).unseenCount > 0 && (
+              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-white shadow-lg shadow-emerald-500/40">
+                {(user as any).unseenCount}
+              </span>
+            )}
+          </button>
+        ))}
+        
         {user?.role === 'admin' && (
           <div className="pt-2">
             <button
-              type="button"
-              ref={settingsButtonRef}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                setIsSettingsOpen(prev => !prev);
-                setTimeout(() => {
-                  try { settingsButtonRef.current?.focus(); } catch {}
-                }, 50);
-              }}
+              onClick={() => setIsSettingsOpen(!isSettingsOpen)}
               className="w-full flex items-center justify-between px-4 py-3 rounded-xl hover:bg-zinc-900 text-zinc-400 hover:text-zinc-200 transition-all duration-200"
             >
               <div className="flex items-center gap-3">
@@ -190,12 +129,11 @@ export function Sidebar({ activeTab, onTabChange, onLogout, user }: SidebarProps
               </div>
               {isSettingsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
             </button>
-
+            
             {isSettingsOpen && (
               <div className="pl-4 mt-1 space-y-1">
                 {settingsSubItems.map((subItem) => (
                   <button
-                    type="button"
                     key={subItem.id}
                     onClick={() => {
                       onTabChange(subItem.id);
@@ -233,7 +171,7 @@ export function Sidebar({ activeTab, onTabChange, onLogout, user }: SidebarProps
                 {user.role === 'admin' ? 'Administrador' : user.role === 'dentist' ? 'Dentista' : user.role === 'attendant' ? 'Atendente' : 'Paciente'}
               </p>
             </div>
-            <button type="button" onClick={() => window.dispatchEvent(new CustomEvent('open-profile-edit'))} className="text-zinc-500 hover:text-white">
+            <button onClick={() => window.dispatchEvent(new CustomEvent('open-profile-edit'))} className="text-zinc-500 hover:text-white">
               <Settings className="h-4 w-4" />
             </button>
           </div>

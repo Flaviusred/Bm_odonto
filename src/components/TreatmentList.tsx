@@ -6,7 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle } from './Card';
 import { Input } from './Input';
 import { Modal } from './Modal';
 import { cn } from '../lib/utils';
-import { parseDate } from '../lib/dateUtils';
 import { Treatment, Patient, Dentist, Appointment } from '../types';
 
 interface TreatmentListProps {
@@ -142,7 +141,7 @@ export function TreatmentList({
                 {filteredTreatments.map((treatment) => (
                   <tr key={treatment.id} className="hover:bg-zinc-50/50 transition-colors group">
                     <td className="px-6 py-4 text-sm text-zinc-600">
-                      {parseDate(treatment.date).toLocaleDateString('pt-BR')}
+                      {new Date(treatment.date).toLocaleDateString('pt-BR')}
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
@@ -195,7 +194,7 @@ export function TreatmentList({
                 <div className="flex justify-between items-start">
                   <div>
                     <p className="text-sm font-bold text-zinc-900">{getPatientName(treatment.patientId)}</p>
-                    <p className="text-xs text-zinc-500">{parseDate(treatment.date).toLocaleDateString('pt-BR')} • {getDentistName(treatment.dentistId)}</p>
+                    <p className="text-xs text-zinc-500">{new Date(treatment.date).toLocaleDateString('pt-BR')} • {getDentistName(treatment.dentistId)}</p>
                   </div>
                   <Button variant="ghost" size="icon" onClick={() => onDeleteTreatment(treatment.id)}>
                     <Trash2 className="h-4 w-4 text-red-400" />

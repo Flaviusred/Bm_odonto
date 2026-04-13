@@ -8,7 +8,7 @@ import { Modal } from './Modal';
 import { Patient, Appointment, Treatment, Dentist, PatientType } from '../types';
 import { patientService } from '../services/patientService';
 import { cn, validateCPF, maskCPF, maskPhone, maskCEP } from '../lib/utils';
-import { formatDateDDMMYYYY, formatDateLocal, parseDate, parseDateTime } from '../lib/dateUtils';
+import { formatDateDDMMYYYY, formatDateLocal, parseDate } from '../lib/dateUtils';
 
 interface PatientListProps {
   patients: Patient[];
@@ -18,7 +18,6 @@ interface PatientListProps {
   onAddPatient: (patient: Omit<Patient, 'id' | 'createdAt' | 'isActive'> & { id?: string }) => void;
   onDeletePatient: (id: string) => void;
   onUpdatePatient: (patient: Patient) => void;
-  onTabChange?: (tab: string) => void;
 }
 
 export function PatientList({ 
@@ -28,8 +27,7 @@ export function PatientList({
   dentists, 
   onAddPatient, 
   onDeletePatient, 
-  onUpdatePatient,
-  onTabChange
+  onUpdatePatient 
 }: PatientListProps) {
   return (
     <PatientListContent 
@@ -39,8 +37,7 @@ export function PatientList({
       dentists={dentists} 
       onAddPatient={onAddPatient} 
       onDeletePatient={onDeletePatient} 
-      onUpdatePatient={onUpdatePatient}
-      onTabChange={onTabChange}
+      onUpdatePatient={onUpdatePatient} 
     />
   );
 }
@@ -52,8 +49,7 @@ function PatientListContent({
   dentists, 
   onAddPatient, 
   onDeletePatient, 
-  onUpdatePatient,
-  onTabChange
+  onUpdatePatient 
 }: PatientListProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -74,10 +70,6 @@ function PatientListContent({
   const [successMessage, setSuccessMessage] = useState('');
   const [viewingDependentsOf, setViewingDependentsOf] = useState<Patient | null>(null);
 
-  const handleBackFromPatients = () => {
-    onTabChange?.('dashboard');
-  };
-
   const handleSearchCBMPB = async () => {
     if (!cbmpbIdentifier) return;
     setIsSearching(true);
@@ -88,38 +80,29 @@ function PatientListContent({
       const existingTitular = patients.find(p => p.cpf === titular.cpf);
       const titularId = existingTitular ? existingTitular.id : (titular.id || Math.random().toString(36).substr(2, 9));
       
-      // Adicionar titular se não existir (aguarda a operação quando possível)
-      try {
-        if (!existingTitular) {
-          await Promise.resolve(onAddPatient({ 
-            ...titular, 
-            id: titularId,
-            patientType: 'cbmpb'
-          } as any));
-        }
-
-        // Adicionar dependentes vinculados ao titularId (aguarda todas as gravações)
-        const depPromises: Promise<any>[] = [];
-        for (const dep of dependentes) {
-          const existingDep = patients.find(p => 
-            p.dependentOf === titularId && 
-            (p.name === dep.name || (dep.cpf && p.cpf === dep.cpf))
-          );
-          if (!existingDep) {
-            depPromises.push(Promise.resolve(onAddPatient({ 
-              ...dep, 
-              patientType: 'cbmpb',
-              dependentOf: titularId 
-            } as any)));
-          }
-        }
-        if (depPromises.length > 0) await Promise.all(depPromises);
-      } catch (err) {
-        alert('Erro ao salvar pacientes importados: ' + (err instanceof Error ? err.message : String(err)));
-        setIsSearching(false);
-        setIsConfirmImportOpen(false);
-        return;
+      // Adicionar titular se não existir
+      if (!existingTitular) {
+        onAddPatient({ 
+          ...titular, 
+          id: titularId,
+          patientType: 'cbmpb' 
+        } as any);
       }
+      
+      // Adicionar dependentes vinculados ao titularId
+      dependentes.forEach(dep => {
+        const existingDep = patients.find(p => 
+          p.dependentOf === titularId && 
+          (p.name === dep.name || (dep.cpf && p.cpf === dep.cpf))
+        );
+        if (!existingDep) {
+          onAddPatient({ 
+            ...dep, 
+            patientType: 'cbmpb',
+            dependentOf: titularId 
+          } as any);
+        }
+      });
       
       // Abrir modal de dependentes se houver dependentes
       if (dependentes.length > 0) {
@@ -223,16 +206,7 @@ function PatientListContent({
       setSuccessMessage('Paciente atualizado com sucesso!');
       setIsSuccessModalOpen(true);
     } else {
-      // Herdar email e telefone do titular se o dependente não tiver os campos preenchidos
-      let finalData = { ...formData };
-      if (finalData.dependentOf) {
-        const titular = patients.find(p => p.id === finalData.dependentOf);
-        if (titular) {
-          if (!finalData.email && titular.email) finalData.email = titular.email;
-          if (!finalData.phone && titular.phone) finalData.phone = titular.phone;
-        }
-      }
-      onAddPatient(finalData);
+      onAddPatient(formData);
       setSuccessMessage('Paciente cadastrado com sucesso!');
       setIsSuccessModalOpen(true);
     }
@@ -365,11 +339,11 @@ function PatientListContent({
       >
         <div className="flex items-center gap-3 group/name text-left flex-1 min-w-0">
           <div className="h-10 w-10 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold transition-colors group-hover/name:bg-emerald-100 shrink-0">
-            {(patient.name || '?').charAt(0)}
+            {patient.name.charAt(0)}
           </div>
           <div className="flex flex-col min-w-0">
             <span className="font-medium text-zinc-900 group-hover/name:text-emerald-600 transition-colors truncate">
-              {patient.name || '—'}
+              {patient.name}
             </span>
             <div className="flex flex-wrap gap-1 mt-0.5">
               {patient.registrationNumber ? (
@@ -659,32 +633,8 @@ function PatientListContent({
                     <span>•</span>
                     <span>{dep.cpf}</span>
                   </div>
-                  {dep.email && (
-                    <div className="flex items-center gap-1 mt-1 text-xs text-zinc-400">
-                      <Mail className="h-3 w-3" />
-                      <span className="truncate max-w-[180px]">{dep.email}</span>
-                      {dep.email === patients.find(p => p.id === dep.dependentOf)?.email && (
-                        <span className="text-[10px] text-emerald-600 font-bold ml-1">(herdado)</span>
-                      )}
-                    </div>
-                  )}
-                  {dep.phone && (
-                    <div className="flex items-center gap-1 mt-0.5 text-xs text-zinc-400">
-                      <Phone className="h-3 w-3" />
-                      <span>{dep.phone}</span>
-                      {dep.phone === patients.find(p => p.id === dep.dependentOf)?.phone && (
-                        <span className="text-[10px] text-emerald-600 font-bold ml-1">(herdado)</span>
-                      )}
-                    </div>
-                  )}
                 </div>
-                <div className="flex gap-2 flex-wrap">
-                  <Button variant="outline" size="sm" className="flex-1 h-9 text-xs gap-2 text-zinc-600 border-zinc-200" onClick={() => {
-                    setViewingDependentsOf(null);
-                    handleEdit(dep);
-                  }}>
-                    <Edit2 className="h-3 w-3" /> Editar
-                  </Button>
+                <div className="flex gap-2">
                   <Button variant="outline" size="sm" className="flex-1 h-9 text-xs gap-2 text-emerald-600 border-emerald-50" onClick={() => {
                     setViewingDependentsOf(null);
                     setSelectedPatientId(dep.id);
@@ -712,7 +662,7 @@ function PatientListContent({
   if (selectedPatientDetails) {
     const patientAppointments = appointments
       .filter(a => a.patientId === selectedPatientDetails.id)
-      .sort((a, b) => parseDateTime(b.date, b.time).getTime() - parseDateTime(a.date, a.time).getTime());
+      .sort((a, b) => new Date(b.date + 'T' + b.time).getTime() - new Date(a.date + 'T' + a.time).getTime());
     
     const patientTreatments = treatments
       .filter(t => t.patientId === selectedPatientDetails.id)
@@ -721,10 +671,10 @@ function PatientListContent({
          (t.type && t.type.toLowerCase().includes(historySearch.toLowerCase()))) &&
         (dentistFilter === 'all' || t.dentistId === dentistFilter)
       )
-      .sort((a, b) => parseDate(b.date).getTime() - parseDate(a.date).getTime());
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     const groupedTreatments = patientTreatments.reduce((acc, t) => {
-      const date = parseDate(t.date).toLocaleDateString('pt-BR');
+      const date = new Date(t.date).toLocaleDateString('pt-BR');
       const key = `${date}-${t.dentistId}`;
       if (!acc[key]) {
         acc[key] = { date, dentistId: t.dentistId, treatments: [] };
@@ -928,17 +878,11 @@ return (
   <>
     <div className="p-4 lg:p-8 space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="space-y-2">
-          <Button className="gap-2 sm:hidden w-fit h-10 px-4" onClick={handleBackFromPatients}>
-            <ArrowLeft className="h-4 w-4" />
-            Voltar
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold text-zinc-900">Pacientes</h1>
-            <p className="text-zinc-500 text-sm">Gerencie o cadastro de seus pacientes</p>
-          </div>
+        <div className="space-y-1">
+          <h1 className="text-2xl font-bold text-zinc-900">Pacientes</h1>
+          <p className="text-zinc-500 text-sm">Gerencie o cadastro de seus pacientes</p>
         </div>
-        <Button onClick={() => setIsModalOpen(true)} className="gap-2 w-full sm:w-auto h-10">
+        <Button onClick={() => setIsModalOpen(true)} className="flex items-center justify-center gap-2 w-full sm:w-auto h-10">
           <Plus className="h-4 w-4" />
           <span className="whitespace-nowrap">Novo Paciente</span>
         </Button>
