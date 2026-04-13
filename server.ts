@@ -13,15 +13,37 @@ import { google } from "googleapis";
 
 dotenv.config();
 
+// Lê configurações do Firebase client config para reutilizar projectId e databaseId no Admin SDK
+let firebaseClientConfig: any = {};
+try {
+  const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(configPath)) {
+    firebaseClientConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+  }
+} catch (e) {
+  console.warn('Failed to read firebase-applet-config.json:', e);
+}
+
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || firebaseClientConfig.projectId || '';
+const FIREBASE_DATABASE_ID = process.env.FIREBASE_DATABASE_ID || ((): string => {
+  const id = (firebaseClientConfig.firestoreDatabaseId || '').trim();
+  return (id && id !== '(default)') ? id : '';
+})();
+
 // Initialize Firebase Admin SDK (server-side)
 try {
   const apps = (admin && admin.apps) ? admin.apps : [];
   if (apps.length === 0) {
+    const baseConfig: any = {};
+    if (FIREBASE_PROJECT_ID) baseConfig.projectId = FIREBASE_PROJECT_ID;
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
       const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-      admin.initializeApp({ credential: admin.credential.cert(serviceAccount as any) });
+      admin.initializeApp({ ...baseConfig, credential: admin.credential.cert(serviceAccount as any) });
     } else {
-      admin.initializeApp();
+      // Sem service account: tenta ADC com projectId explícito.
+      // No Render, adicione a variável FIREBASE_SERVICE_ACCOUNT com o JSON da service account.
+      console.warn('FIREBASE_SERVICE_ACCOUNT não configurado — Admin SDK usando ADC. Configure no painel do Render para funcionar corretamente.');
+      admin.initializeApp(baseConfig);
     }
   }
 } catch (e) {
@@ -30,14 +52,33 @@ try {
 
 let db: any = null;
 try {
-  if (admin && typeof admin.firestore === 'function') db = admin.firestore();
-  else if (admin && admin.default && typeof admin.default.firestore === 'function') db = admin.default.firestore();
+  let adminApp: any = null;
+  if (admin && admin.apps && admin.apps.length > 0) adminApp = admin.app();
+  if (adminApp) {
+    // Usa named database quando disponível (mesma database do client SDK)
+    if (FIREBASE_DATABASE_ID) {
+      try {
+        const { getFirestore } = require('firebase-admin/firestore');
+        db = getFirestore(adminApp, FIREBASE_DATABASE_ID);
+        console.log(`Firestore admin conectado ao database: ${FIREBASE_DATABASE_ID}`);
+      } catch (namedDbErr) {
+        console.warn('getFirestore com named database falhou, tentando default:', namedDbErr);
+        db = adminApp.firestore ? adminApp.firestore() : null;
+      }
+    } else {
+      db = adminApp.firestore ? adminApp.firestore() : null;
+    }
+  } else if (admin && typeof admin.firestore === 'function') {
+    db = admin.firestore();
+  }
 } catch (e) {
   console.warn('Failed to initialize Firestore instance:', e);
 }
 
 if (!db) {
   console.warn('Firestore not initialized. Firestore-dependent endpoints will fail until configured.');
+} else {
+  console.log(`Firebase Admin SDK inicializado. Project: ${FIREBASE_PROJECT_ID || '(desconhecido)'}, Database: ${FIREBASE_DATABASE_ID || '(default)'}`);
 }
 
 const app = express();
