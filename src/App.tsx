@@ -1391,18 +1391,49 @@ export default function App() {
       return;
     }
 
+    // Busca localmente — evita depender do Firestore server-side (Admin SDK sem service account).
+    let userToUpdate: any = users.find(
+      (u: any) => u.email && u.email.toLowerCase() === email && u.cpf && u.cpf.replace(/\D/g, '') === cpf
+    );
+    if (!userToUpdate) {
+      const patientMatch = patients.find(
+        (p: any) => p.email && p.email.toLowerCase() === email && p.cpf && p.cpf.replace(/\D/g, '') === cpf
+      );
+      if (patientMatch) {
+        userToUpdate = users.find((u: any) => u.id === patientMatch.id) ||
+          { id: patientMatch.id, email: patientMatch.email, name: patientMatch.name };
+      }
+    }
+
+    if (!userToUpdate) {
+      // Mensagem genérica para não revelar se o e-mail existe.
+      alert('Se o e-mail e CPF corresponderem a uma conta, você receberá um link de recuperação de senha em instantes.');
+      setIsForgotPasswordOpen(false);
+      setForgotPasswordEmail('');
+      setForgotPasswordCpf('');
+      return;
+    }
+
     try {
       await runWithLoading(async () => {
-        const response = await fetch('/api/forgot-password', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, cpf }),
-        });
+        // Gera token no cliente e escreve no Firestore via client SDK (não depende de Admin SDK).
+        const token = crypto.randomUUID();
+        const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hora
 
-        if (!response.ok) {
-          const err = await response.json().catch(() => ({}));
-          throw new Error((err as any).error || 'Erro ao solicitar recuperação de senha.');
-        }
+        await setDoc(doc(db, 'users', userToUpdate.id), {
+          passwordResetToken: token,
+          passwordResetExpires: expiresAt,
+        }, { merge: true });
+
+        const origin = window.location.origin;
+        const resetLink = `${origin}/?resetToken=${token}&uid=${userToUpdate.id}`;
+
+        // Envia e-mail via servidor (nodemailer).
+        await emailService.sendPasswordResetEmail(
+          String(userToUpdate.email).toLowerCase(),
+          resetLink,
+          userToUpdate.name || ''
+        );
       });
 
       alert('Se o e-mail e CPF corresponderem a uma conta, você receberá um link de recuperação de senha em instantes. Verifique sua caixa de entrada e a pasta de spam.');
