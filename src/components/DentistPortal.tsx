@@ -28,6 +28,12 @@ import {
 import { cn } from '../lib/utils';
 import { Toaster, toast } from 'sonner';
 
+const PDF_MAX_MB = 5;
+const RECORD_IMAGE_MAX_MB = 3;
+const PDF_MAX_BYTES = PDF_MAX_MB * 1024 * 1024;
+const RECORD_IMAGE_MAX_BYTES = RECORD_IMAGE_MAX_MB * 1024 * 1024;
+const RECORD_ALLOWED_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
+
 interface DentistPortalProps {
   activeTab: string;
   onTabChange?: (tab: string) => void;
@@ -42,8 +48,13 @@ interface DentistPortalProps {
   onUpdateTreatment: (treatment: Treatment) => void;
   onAddDocument: (doc: Omit<PatientDocument, 'id' | 'uploadedAt'>) => void;
   onUpdateAppointmentStatus: (id: string, status: Appointment['status']) => void;
-  notifications: { id: string; message: string; type: 'info' | 'success' }[];
-  setNotifications: React.Dispatch<React.SetStateAction<{ id: string; message: string; type: 'info' | 'success' }[]>>;
+  unseenCount: number;
+  setUnseenCount: React.Dispatch<React.SetStateAction<number>>;
+  markAllNotificationsRead?: () => Promise<void> | (() => void);
+  notifications?: Array<{ id: string; message: string; type: 'info' | 'success'; read?: boolean; appointmentId?: string | null; createdAt?: number; showAsToast?: boolean }>;
+  isNotificationsOpen?: boolean;
+  toggleNotificationsPanel?: () => void;
+  removeNotification?: (id: string) => void;
 }
 
 export function DentistPortal({ 
@@ -60,8 +71,12 @@ export function DentistPortal({
   onUpdateTreatment,
   onAddDocument,
   onUpdateAppointmentStatus,
+  unseenCount, setUnseenCount,
+  markAllNotificationsRead,
   notifications,
-  setNotifications
+  isNotificationsOpen,
+  toggleNotificationsPanel,
+  removeNotification
 }: DentistPortalProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
@@ -73,7 +88,12 @@ export function DentistPortal({
   const [editingTreatment, setEditingTreatment] = useState<Treatment | null>(null);
   const [isScheduleNextPromptOpen, setIsScheduleNextPromptOpen] = useState(false);
   const [currentAppointment, setCurrentAppointment] = useState<Appointment | null>(null);
-  const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
+  const [appointmentDetail, setAppointmentDetail] = useState<{ apt: Appointment; patient: Patient | null } | null>(null);
+
+  const openAppointmentDetail = (apt: Appointment) => {
+    setAppointmentDetail({ apt, patient: patients.find(p => p.id === apt.patientId) || null });
+  };
+
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -86,19 +106,9 @@ export function DentistPortal({
     return () => window.removeEventListener('message', handleMessage);
   }, []);
 
-  const handleConnectGoogle = async () => {
-    if (!dentist) return;
-    setIsConnectingGoogle(true);
-    try {
-      const res = await fetch(`/api/auth/google/url?dentistId=${dentist.id}`);
-      const { url } = await res.json();
-      window.open(url, 'google_auth', 'width=600,height=700');
-    } catch (error) {
-      console.error("Failed to get Google Auth URL", error);
-    } finally {
-      setIsConnectingGoogle(false);
-    }
-  };
+  
+
+  
 
   const [treatmentForm, setTreatmentForm] = useState({
     description: '',
@@ -140,11 +150,11 @@ export function DentistPortal({
                 const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                 const apts = myAppointments.filter(a => a.date === dateStr);
                 return (
-                  <div key={day} className="min-h-[80px] p-2 border border-zinc-100 rounded-lg hover:bg-zinc-50 cursor-pointer" onClick={() => { setCurrentDate(new Date(dateStr)); setView('day'); setDisplayMode('list'); }}>
+                  <div key={day} className="min-h-[80px] p-2 border border-zinc-100 rounded-lg hover:bg-zinc-50 cursor-pointer" onClick={() => { setCurrentDate(parseDate(dateStr)); setView('day'); setDisplayMode('list'); }}>
                     <div className="text-sm font-bold text-zinc-900">{day}</div>
                     <div className="space-y-1 mt-1">
                       {apts.slice(0, 2).map(apt => (
-                        <div key={apt.id} className="text-[10px] bg-emerald-100 text-emerald-700 px-1 rounded truncate font-medium">
+                        <div key={apt.id} className={cn("text-[10px] px-1 rounded border truncate font-medium cursor-pointer transition-colors", statusClass[apt.status])} onClick={e => { e.stopPropagation(); openAppointmentDetail(apt); }}>
                           {apt.time} {getPatientName(apt.patientId)}
                         </div>
                       ))}
@@ -161,7 +171,7 @@ export function DentistPortal({
               const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
               const apts = myAppointments.filter(a => a.date === dateStr);
               return (
-                <div key={day} className="p-3 border border-zinc-100 rounded-lg bg-zinc-50 flex justify-between items-center active:bg-zinc-100 transition-colors" onClick={() => { setCurrentDate(new Date(dateStr)); setView('day'); setDisplayMode('list'); }}>
+                <div key={day} className="p-3 border border-zinc-100 rounded-lg bg-zinc-50 flex justify-between items-center active:bg-zinc-100 transition-colors" onClick={() => { setCurrentDate(parseDate(dateStr)); setView('day'); setDisplayMode('list'); }}>
                   <span className="font-bold text-zinc-900">{day}</span>
                   <span className="text-xs text-zinc-500 font-medium">{apts.length} atendimentos</span>
                 </div>
@@ -199,12 +209,12 @@ export function DentistPortal({
                   {`${String(hour).padStart(2, '0')}:00`}
                 </div>
                 {days.map(d => {
-                  const dateStr = d.toISOString().split('T')[0];
+                  const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
                   const apts = myAppointments.filter(a => a.date === dateStr && parseInt(a.time.split(':')[0]) === hour);
                   return (
                     <div key={d.toISOString() + hour} className="border-b border-r border-zinc-200 min-h-[60px] p-1 relative">
                       {apts.map(apt => (
-                        <div key={apt.id} className="text-[10px] bg-emerald-100 text-emerald-700 px-1 py-0.5 rounded truncate font-medium cursor-pointer hover:opacity-80 mb-1">
+                        <div key={apt.id} className={cn("text-[10px] px-1 py-0.5 rounded border truncate font-medium cursor-pointer transition-colors mb-1", statusClass[apt.status])} onClick={e => { e.stopPropagation(); openAppointmentDetail(apt); }}>
                           {apt.time} {getPatientName(apt.patientId)}
                         </div>
                       ))}
@@ -218,14 +228,18 @@ export function DentistPortal({
       );
     } else {
       // day view
-      const dateStr = currentDate.toISOString().split('T')[0];
+      const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(currentDate.getDate()).padStart(2, '0')}`;
       const apts = myAppointments.filter(a => a.date === dateStr);
       return (
         <div className="space-y-2 mt-4">
           {apts.length > 0 ? apts.map(apt => (
-            <div key={apt.id} className="p-3 sm:p-4 bg-zinc-50 rounded-lg border border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-sm">
+            <div key={apt.id} className="p-3 sm:p-4 bg-zinc-50 rounded-lg border border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-sm cursor-pointer hover:bg-zinc-100 transition-colors" onClick={() => openAppointmentDetail(apt)}>
               <span className="font-bold text-zinc-900 text-lg sm:text-base">{apt.time}</span>
-              <span className="text-sm text-zinc-600 truncate">{getPatientName(apt.patientId)}</span>
+              <span className="text-sm font-medium text-emerald-700 truncate underline underline-offset-2 decoration-dotted">{getPatientName(apt.patientId)}</span>
+              <span className={cn('px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border w-fit', statusClass[apt.status])}>
+                {statusLabel[apt.status]}
+              </span>
+              <ChevronRight className="h-4 w-4 text-zinc-400 shrink-0 hidden sm:block" />
             </div>
           )) : <div className="text-center py-12 text-zinc-500 text-sm">Nenhum agendamento para este dia.</div>}
         </div>
@@ -258,6 +272,22 @@ export function DentistPortal({
 
   const getPatientName = (id: string) => patients.find(p => p.id === id)?.name || 'Paciente';
   const getDentistName = (id: string) => dentists.find(d => d.id === id)?.name || 'Dentista';
+
+  const statusClass: Partial<Record<Appointment['status'], string>> = {
+    scheduled: 'bg-zinc-100 text-zinc-700 border-zinc-200',
+    confirmed: 'bg-blue-100 text-blue-700 border-blue-200',
+    cancelled: 'bg-red-100 text-red-700 border-red-200',
+    completed: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+    blocked: 'bg-amber-100 text-amber-700 border-amber-200',
+  };
+
+  const statusLabel: Partial<Record<Appointment['status'], string>> = {
+    scheduled: 'Agendado',
+    confirmed: 'Confirmado',
+    cancelled: 'Cancelado',
+    completed: 'Concluído',
+    blocked: 'Bloqueado',
+  };
 
   const translateType = (type?: string) => {
     const translations: Record<string, string> = {
@@ -317,13 +347,17 @@ export function DentistPortal({
     }
 
     // Validation
-    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png'];
-    if (!allowedTypes.includes(uploadForm.file.type)) {
+    if (!RECORD_ALLOWED_TYPES.includes(uploadForm.file.type)) {
       toast.error('Tipo de arquivo inválido. Apenas PDF, JPG ou PNG são permitidos.');
       return;
     }
-    if (uploadForm.file.size > 5 * 1024 * 1024) {
-      toast.error('Arquivo muito grande. O limite máximo é 5MB.');
+
+    const isPdf = uploadForm.file.type === 'application/pdf';
+    const maxBytes = isPdf ? PDF_MAX_BYTES : RECORD_IMAGE_MAX_BYTES;
+    const maxLabel = isPdf ? `${PDF_MAX_MB}MB` : `${RECORD_IMAGE_MAX_MB}MB`;
+
+    if (uploadForm.file.size > maxBytes) {
+      toast.error(`Arquivo muito grande. Limite para este tipo: ${maxLabel}.`);
       return;
     }
 
@@ -347,12 +381,46 @@ export function DentistPortal({
     <div className="flex flex-col h-full">
       <header className="flex items-center justify-between p-4 bg-white border-b border-zinc-200">
         <h1 className="text-xl font-bold">Portal do Dentista</h1>
-        <div className="relative cursor-pointer" onClick={() => setNotifications([])}>
-          <Bell className="h-6 w-6 text-zinc-600" />
-          {notifications.length > 0 && (
-            <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
-              {notifications.length}
-            </span>
+        <div className="relative">
+          <button className="relative" onClick={() => toggleNotificationsPanel?.() } aria-label="Notificações">
+            <Bell className="h-6 w-6 text-zinc-600" />
+            {(unseenCount > 0) && (
+              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full h-4 w-4 flex items-center justify-center">
+                {unseenCount}
+              </span>
+            )}
+          </button>
+
+          {/** Panel */}
+          {isNotificationsOpen && (
+            <div className="absolute right-0 mt-2 w-96 max-h-96 overflow-auto bg-white rounded-lg shadow-lg border p-2 z-30">
+              <div className="flex items-center justify-between px-2 py-1 border-b">
+                <div className="font-bold">Notificações</div>
+                <div className="flex items-center gap-2">
+                  <button className="text-xs text-zinc-500 hover:text-zinc-700" onClick={async () => { await markAllNotificationsRead?.(); setUnseenCount(0); }}>Marcar todas como lidas</button>
+                </div>
+              </div>
+              <div className="divide-y">
+                {notifications && notifications.length > 0 ? (
+                  notifications.slice().sort((a,b) => (b.createdAt||0) - (a.createdAt||0)).map(n => (
+                    <div key={n.id} className="px-3 py-2 flex items-start gap-3">
+                      <div className="h-8 w-8 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600">
+                        <Calendar className="h-4 w-4" />
+                      </div>
+                      <div className="flex-1">
+                        <div className="text-sm font-medium text-zinc-900">{n.message}</div>
+                        <div className="text-xs text-zinc-400">{n.createdAt ? new Date(n.createdAt).toLocaleString('pt-BR') : ''}</div>
+                      </div>
+                      <div className="flex flex-col items-end gap-1">
+                        <button className="text-xs text-zinc-500 hover:text-zinc-800" onClick={() => removeNotification?.(n.id)}>Marcar como lida</button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="p-3 text-center text-sm text-zinc-500">Sem notificações</div>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </header>
@@ -484,10 +552,10 @@ export function DentistPortal({
                     {treatments
                       .filter(t => t.patientId === selectedPatient.id)
                       .filter(t => 
-                        t.description.toLowerCase().includes(historySearch.toLowerCase()) ||
-                        (t.type && t.type.toLowerCase().includes(historySearch.toLowerCase()))
-                      )
-                      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                          (t.description || '').toLowerCase().includes(historySearch.toLowerCase()) ||
+                          ((t.type || '').toLowerCase().includes(historySearch.toLowerCase()))
+                        )
+                      .sort((a, b) => parseDate(b.date).getTime() - parseDate(a.date).getTime())
                       .map(t => {
                         const isExpanded = expandedTreatments.includes(t.id);
                         return (
@@ -502,7 +570,7 @@ export function DentistPortal({
                                     {translateType(t.type)}
                                   </h4>
                                   <span className="text-xs font-medium text-zinc-400 whitespace-nowrap">
-                                    {new Date(t.date).toLocaleDateString('pt-BR')}
+                                    {parseDate(t.date).toLocaleDateString('pt-BR')}
                                   </span>
                                 </div>
                                 <p className="text-xs text-zinc-500 line-clamp-1 sm:line-clamp-none">
@@ -565,22 +633,6 @@ export function DentistPortal({
                   <p className="text-xs sm:text-sm text-zinc-500">Confira sua agenda de atendimentos</p>
                 </div>
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full lg:w-auto">
-                  {!dentist?.googleTokens ? (
-                    <Button 
-                      variant="outline" 
-                      onClick={handleConnectGoogle} 
-                      disabled={isConnectingGoogle}
-                      className="gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50 text-xs h-10 w-full lg:w-auto"
-                    >
-                      <img src="https://www.google.com/favicon.ico" className="h-4 w-4" alt="Google" />
-                      {isConnectingGoogle ? 'Conectando...' : 'Conectar Google Agenda'}
-                    </Button>
-                  ) : (
-                    <div className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-100 text-emerald-700 text-xs font-medium w-full lg:w-auto">
-                      <CheckCircle2 className="h-3 w-3" />
-                      Google Agenda Conectado
-                    </div>
-                  )}
                   <Button onClick={() => {
                     setSelectedPatient(null);
                     setIsAppointmentModalOpen(true);
@@ -648,20 +700,15 @@ export function DentistPortal({
                                   <div className="h-8 w-8 rounded-full bg-zinc-100 flex items-center justify-center text-xs font-bold text-zinc-600 shrink-0">
                                     {getPatientName(apt.patientId).charAt(0)}
                                   </div>
-                                  <span className="text-sm font-medium text-zinc-900 truncate max-w-[120px] sm:max-w-none">{getPatientName(apt.patientId)}</span>
+                                  <button type="button" className="text-sm font-medium text-emerald-700 hover:underline truncate max-w-[120px] sm:max-w-none text-left" onClick={() => openAppointmentDetail(apt)}>{getPatientName(apt.patientId)}</button>
                                 </div>
                               </td>
                               <td className="px-4 lg:px-6 py-4">
                                 <span className={cn(
-                                  'px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap',
-                                  apt.status === 'scheduled' ? 'bg-zinc-100 text-zinc-600' :
-                                  apt.status === 'confirmed' ? 'bg-blue-100 text-blue-600' :
-                                  apt.status === 'cancelled' ? 'bg-red-100 text-red-600' :
-                                  'bg-emerald-100 text-emerald-600'
+                                  'px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap border',
+                                  statusClass[apt.status]
                                 )}>
-                                  {apt.status === 'scheduled' ? 'Agendado' :
-                                   apt.status === 'confirmed' ? 'Confirmado' :
-                                   apt.status === 'cancelled' ? 'Cancelado' : 'Concluído'}
+                                  {statusLabel[apt.status]}
                                 </span>
                               </td>
                               <td className="px-4 lg:px-6 py-4 text-right">
@@ -713,19 +760,14 @@ export function DentistPortal({
                                 <div className="h-8 w-8 rounded-full bg-zinc-100 flex items-center justify-center text-xs font-bold text-zinc-600 shrink-0">
                                   {getPatientName(apt.patientId).charAt(0)}
                                 </div>
-                                <span className="text-sm font-medium text-zinc-900">{getPatientName(apt.patientId)}</span>
+                                <button type="button" className="text-sm font-medium text-emerald-700 hover:underline text-left" onClick={() => openAppointmentDetail(apt)}>{getPatientName(apt.patientId)}</button>
                               </div>
                             </div>
                             <span className={cn(
-                              'px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider whitespace-nowrap shrink-0',
-                              apt.status === 'scheduled' ? 'bg-zinc-100 text-zinc-600' :
-                              apt.status === 'confirmed' ? 'bg-blue-100 text-blue-600' :
-                              apt.status === 'cancelled' ? 'bg-red-100 text-red-600' :
-                              'bg-emerald-100 text-emerald-600'
+                              'px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider whitespace-nowrap shrink-0 border',
+                              statusClass[apt.status]
                             )}>
-                              {apt.status === 'scheduled' ? 'Agendado' :
-                               apt.status === 'confirmed' ? 'Confirmado' :
-                               apt.status === 'cancelled' ? 'Cancelado' : 'Concluído'}
+                              {statusLabel[apt.status]}
                             </span>
                           </div>
                           
@@ -788,15 +830,15 @@ export function DentistPortal({
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {patients.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase())).map(patient => (
+                {patients.filter(p => (p.name || '').toLowerCase().includes(searchTerm.toLowerCase())).map(patient => (
                   <Card key={patient.id} className="border-none shadow-sm hover:ring-2 hover:ring-emerald-500 transition-all cursor-pointer" onClick={() => setSelectedPatient(patient)}>
                     <CardContent className="p-6">
                       <div className="flex items-center gap-4">
                         <div className="h-12 w-12 rounded-full bg-zinc-100 flex items-center justify-center text-zinc-600 font-bold">
-                          {patient.name.charAt(0)}
+                          {(patient.name || 'Paciente').charAt(0)}
                         </div>
                         <div className="flex-1">
-                          <h3 className="font-bold text-zinc-900">{patient.name}</h3>
+                          <h3 className="font-bold text-zinc-900">{patient.name || 'Paciente'}</h3>
                           <p className="text-xs text-zinc-500">{patient.cpf}</p>
                         </div>
                         <ChevronRight className="h-5 w-5 text-zinc-300" />
@@ -817,7 +859,7 @@ export function DentistPortal({
               </div>
 
               <div className="space-y-4">
-                {myTreatments.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(t => (
+                {myTreatments.sort((a, b) => parseDate(b.date).getTime() - parseDate(a.date).getTime()).map(t => (
                   <Card key={t.id} className="border-none shadow-sm">
                     <CardContent className="p-6">
                       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -829,9 +871,9 @@ export function DentistPortal({
                             <h3 className="font-bold text-zinc-900">{t.description}</h3>
                             <p className="text-sm text-zinc-500">Paciente: {getPatientName(t.patientId)}</p>
                             <div className="flex items-center gap-4 mt-2">
-                              <div className="flex items-center gap-1 text-xs text-zinc-400">
+                                <div className="flex items-center gap-1 text-xs text-zinc-400">
                                 <Calendar className="h-3 w-3" />
-                                {new Date(t.date).toLocaleDateString('pt-BR')}
+                                {parseDate(t.date).toLocaleDateString('pt-BR')}
                               </div>
                               {t.type && (
                                 <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 text-[10px] font-bold uppercase">
@@ -868,8 +910,8 @@ export function DentistPortal({
             {(() => {
               const patientTreatments = treatments.filter(t => t.patientId === selectedPatient?.id);
               if (historyGroupBy === 'date') {
-                const grouped = patientTreatments.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).reduce((acc, t) => {
-                  const date = new Date(t.date).toLocaleDateString('pt-BR');
+                const grouped = patientTreatments.sort((a, b) => parseDate(b.date).getTime() - parseDate(a.date).getTime()).reduce((acc, t) => {
+                  const date = parseDate(t.date).toLocaleDateString('pt-BR');
                   if (!acc[date]) acc[date] = [];
                   acc[date].push(t);
                   return acc;
@@ -896,11 +938,11 @@ export function DentistPortal({
                 return Object.entries(grouped).map(([dentistName, ts]) => (
                   <div key={dentistName} className="space-y-2">
                     <h4 className="text-xs font-bold text-zinc-500 uppercase sticky top-0 bg-white py-1">{dentistName}</h4>
-                    {ts.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(t => (
+                    {ts.sort((a, b) => parseDate(b.date).getTime() - parseDate(a.date).getTime()).map(t => (
                       <div key={t.id} className="p-3 bg-zinc-50 rounded-lg border border-zinc-100 text-sm">
                         <p className="font-bold text-zinc-900">{translateType(t.type)}</p>
                         <p className="text-zinc-600 mt-1">{t.description}</p>
-                        <p className="text-[10px] text-zinc-400 mt-2 font-medium">Data: {new Date(t.date).toLocaleDateString('pt-BR')}</p>
+                        <p className="text-[10px] text-zinc-400 mt-2 font-medium">Data: {parseDate(t.date).toLocaleDateString('pt-BR')}</p>
                       </div>
                     ))}
                   </div>
@@ -994,13 +1036,14 @@ export function DentistPortal({
               type="file" 
               ref={fileInputRef} 
               className="hidden" 
+              accept="application/pdf,image/jpeg,image/png"
               onChange={e => setUploadForm({...uploadForm, file: e.target.files?.[0] || null})}
             />
             <Upload className="h-8 w-8 text-zinc-400 mx-auto mb-2" />
             <p className="text-sm font-medium text-zinc-700">
               {uploadForm.file ? uploadForm.file.name : 'Clique ou arraste o arquivo aqui'}
             </p>
-            <p className="text-xs text-zinc-400 mt-1">PDF, JPG ou PNG (Máx 5MB)</p>
+            <p className="text-xs text-zinc-400 mt-1">PDF até 5MB | Imagens (JPG/PNG) até 3MB</p>
           </div>
           <div className="flex flex-col sm:flex-row justify-end gap-3 pt-2">
              <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={() => setIsUploadModalOpen(false)}>Cancelar</Button>
@@ -1013,8 +1056,8 @@ export function DentistPortal({
         <form onSubmit={handleRegisterTreatment} className="space-y-4">
           <div className="p-3 sm:p-4 rounded-xl bg-emerald-50 border border-emerald-100 mb-2">
             <p className="text-sm font-bold text-emerald-900 truncate">Paciente: {selectedPatient?.name}</p>
-            <p className="text-xs text-emerald-700 mt-1">
-              Consulta em {currentAppointment ? new Date(currentAppointment.date).toLocaleDateString('pt-BR') : ''} às {currentAppointment?.time}
+              <p className="text-xs text-emerald-700 mt-1">
+              Consulta em {currentAppointment ? parseDate(currentAppointment.date).toLocaleDateString('pt-BR') : ''} às {currentAppointment?.time}
             </p>
           </div>
           
@@ -1061,6 +1104,100 @@ export function DentistPortal({
           </div>
         </form>
       </Modal>
+      {/* Appointment Detail / Patient Quick Info Modal */}
+      <Modal isOpen={!!appointmentDetail} onClose={() => setAppointmentDetail(null)} title="Detalhes do Agendamento">
+        {appointmentDetail && (
+          <div className="space-y-5">
+            {/* Patient header */}
+            <div className="flex items-center gap-4 p-4 bg-zinc-50 rounded-xl border border-zinc-100">
+              <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-bold text-lg shrink-0">
+                {appointmentDetail.patient?.name.charAt(0) || '?'}
+              </div>
+              <div className="overflow-hidden">
+                <h3 className="font-bold text-zinc-900 text-lg leading-tight truncate">{appointmentDetail.patient?.name || 'Paciente'}</h3>
+                <p className="text-xs text-zinc-500">{appointmentDetail.patient?.cpf || '—'}</p>
+              </div>
+            </div>
+
+            {/* Patient info grid */}
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-100">
+                <p className="text-[10px] text-zinc-400 uppercase font-semibold mb-1">Nascimento</p>
+                <p className="font-medium text-zinc-900">{formatDateDDMMYYYY(appointmentDetail.patient?.birthDate || '')}</p>
+              </div>
+              <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-100">
+                <p className="text-[10px] text-zinc-400 uppercase font-semibold mb-1">Telefone</p>
+                <p className="font-medium text-zinc-900">{appointmentDetail.patient?.phone || '—'}</p>
+              </div>
+              <div className="col-span-2 p-3 bg-zinc-50 rounded-lg border border-zinc-100">
+                <p className="text-[10px] text-zinc-400 uppercase font-semibold mb-1">E-mail</p>
+                <p className="font-medium text-zinc-900 truncate">{appointmentDetail.patient?.email || '—'}</p>
+              </div>
+              {appointmentDetail.patient?.anamnesis && (
+                <div className="col-span-2 p-3 bg-amber-50 rounded-lg border border-amber-100">
+                  <p className="text-[10px] text-amber-700 uppercase font-semibold mb-1">Anamnese</p>
+                  <p className="text-sm text-zinc-700 leading-relaxed">{appointmentDetail.patient.anamnesis}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Appointment info */}
+            <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-100">
+              <p className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider mb-2">Agendamento</p>
+              <div className="flex flex-wrap items-center gap-4 text-sm">
+                <div className="flex items-center gap-1.5 text-zinc-700">
+                  <Calendar className="h-4 w-4 text-emerald-500 shrink-0" />
+                  <span className="font-medium">{formatDateDDMMYYYY(appointmentDetail.apt.date)}</span>
+                </div>
+                <div className="flex items-center gap-1.5 text-zinc-700">
+                  <Clock className="h-4 w-4 text-emerald-500 shrink-0" />
+                  <span className="font-medium">{appointmentDetail.apt.time}</span>
+                </div>
+              </div>
+              {appointmentDetail.apt.notes && (
+                <p className="text-xs text-zinc-600 mt-2 italic">{appointmentDetail.apt.notes}</p>
+              )}
+              <div className="mt-2">
+                <span className={cn(
+                  'px-2.5 py-1 rounded-full text-xs font-medium border',
+                  statusClass[appointmentDetail.apt.status]
+                )}>
+                  {statusLabel[appointmentDetail.apt.status]}
+                </span>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex flex-col gap-2 pt-2 border-t border-zinc-100">
+              {appointmentDetail.apt.status !== 'completed' && appointmentDetail.apt.status !== 'cancelled' && (
+                <Button
+                  className="w-full gap-2"
+                  onClick={() => {
+                    setCurrentAppointment(appointmentDetail.apt);
+                    setSelectedPatient(appointmentDetail.patient);
+                    setAppointmentDetail(null);
+                    setIsTreatmentModalOpen(true);
+                  }}
+                >
+                  <CheckCircle2 className="h-4 w-4" /> Concluir Atendimento
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                className="w-full gap-2"
+                onClick={() => {
+                  setSelectedPatient(appointmentDetail.patient);
+                  setAppointmentDetail(null);
+                  onTabChange?.('dentist-patients');
+                }}
+              >
+                <UserRound className="h-4 w-4" /> Ver Prontuário Completo
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       <Modal 
         isOpen={!!editingTreatment} 
         onClose={() => setEditingTreatment(null)} 

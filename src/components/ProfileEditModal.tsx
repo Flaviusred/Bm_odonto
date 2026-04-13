@@ -5,6 +5,10 @@ import { Button } from './Button';
 import { User } from '../types';
 import { Upload } from 'lucide-react';
 
+const PROFILE_IMAGE_MAX_MB = 1;
+const PROFILE_IMAGE_MAX_BYTES = PROFILE_IMAGE_MAX_MB * 1024 * 1024;
+const PROFILE_ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
 interface ProfileEditModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -37,6 +41,18 @@ export function ProfileEditModal({ isOpen, onClose, user, onUpdateUser, onOpenPa
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      if (!PROFILE_ALLOWED_IMAGE_TYPES.includes(file.type)) {
+        alert('Formato de imagem inválido. Use JPG, PNG ou WEBP.');
+        e.target.value = '';
+        return;
+      }
+
+      if (file.size > PROFILE_IMAGE_MAX_BYTES) {
+        alert(`Imagem de perfil muito grande. Limite: ${PROFILE_IMAGE_MAX_MB}MB.`);
+        e.target.value = '';
+        return;
+      }
+
       // Simulate file upload by creating a local URL
       const reader = new FileReader();
       reader.onloadend = () => {
@@ -114,6 +130,7 @@ export function ProfileEditModal({ isOpen, onClose, user, onUpdateUser, onOpenPa
               Alterar Foto
               <input type="file" className="hidden" accept="image/*" onChange={handleFileChange} />
             </label>
+            <p className="text-xs text-zinc-500">JPG, PNG ou WEBP (max. 1MB)</p>
           </div>
           <Input label="Nome" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} error={errors.name} required />
           <Input label="Email" type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} error={errors.email} required />

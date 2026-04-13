@@ -25,7 +25,7 @@ import {
 } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from './Card';
 import { cn } from '../lib/utils';
-import { formatDateDDMMYYYY } from '../lib/dateUtils';
+import { formatDateDDMMYYYY, parseDate, parseDateTime } from '../lib/dateUtils';
 import { Patient, Appointment, Treatment, Dentist } from '../types';
 
 interface DashboardProps {
@@ -53,7 +53,7 @@ export function Dashboard({ patients, appointments, treatments, dentists }: Dash
   // Group appointments by month for the chart
   const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
   const chartData = months.map((month, index) => {
-    const count = appointments.filter(a => new Date(a.date).getMonth() === index).length;
+    const count = appointments.filter(a => parseDate(a.date).getMonth() === index).length;
     return { name: month, appointments: count };
   }).slice(0, new Date().getMonth() + 1);
 
@@ -76,7 +76,7 @@ export function Dashboard({ patients, appointments, treatments, dentists }: Dash
   const dentistData = Object.entries(dentistCounts).map(([name, value]) => ({ name, value }));
 
   const recentAppointments = appointments
-    .sort((a, b) => new Date(b.date + 'T' + b.time).getTime() - new Date(a.date + 'T' + a.time).getTime())
+    .sort((a, b) => parseDateTime(b.date, b.time).getTime() - parseDateTime(a.date, a.time).getTime())
     .slice(0, 4);
 
   const getPatientName = (id: string) => patients.find(p => p.id === id)?.name || 'Paciente';
@@ -149,10 +149,10 @@ export function Dashboard({ patients, appointments, treatments, dentists }: Dash
                     </div>
                   </div>
                   <div className="flex items-center">
-                    {apt.status === 'completed' && <CheckCircle2 className="h-5 w-5 text-emerald-500" />}
-                    {apt.status === 'confirmed' && <Clock className="h-5 w-5 text-blue-500" />}
-                    {apt.status === 'scheduled' && <Clock className="h-5 w-5 text-zinc-400" />}
-                    {apt.status === 'cancelled' && <XCircle className="h-5 w-5 text-red-500" />}
+                    {apt.status === 'Concluído' && <CheckCircle2 className="h-5 w-5 text-emerald-500" />}
+                    {apt.status === 'Confirmado' && <Clock className="h-5 w-5 text-blue-500" />}
+                    {apt.status === 'Agendado' && <Clock className="h-5 w-5 text-zinc-400" />}
+                    {apt.status === 'Cancelado' && <XCircle className="h-5 w-5 text-red-500" />}
                   </div>
                 </div>
               ))}
