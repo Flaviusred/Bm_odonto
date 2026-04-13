@@ -28,7 +28,7 @@ import { Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
 import { emailService } from './services/emailService';
 import LoadingOverlay from './components/LoadingOverlay';
 import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
-import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField, orderBy, getDocs } from 'firebase/firestore';
+import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField, orderBy, getDocs, writeBatch } from 'firebase/firestore';
 import { sendPasswordResetEmail, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { db, auth, createAuthUserWithSecondaryApp } from './firebase';
 
@@ -99,13 +99,11 @@ export default function App() {
   const notificationsCacheRef = React.useRef<NotificationItem[]>([]);
   const notificationsInitializedRef = React.useRef(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-  const dentistSeenAppointmentIdsRef = React.useRef<Set<string>>(new Set());
-  const dentistNotifInitializedRef = React.useRef(false);
-  const dentistOverdueNotifMapRef = React.useRef<Record<string, string>>({});
   const [reminderSettings, setReminderSettings] = useState({
     emailReminders: true,
     reminderHoursBefore: 24
   });
+  const finalizedAppointmentStatuses = new Set<Appointment['status']>(['completed', 'cancelled', 'Concluído', 'Cancelado', 'blocked', 'Bloqueado']);
 
   // Helper: resolve a recorded authUid for a given app-level user id
   const getAuthUidForUserId = (id: string): string | undefined => {
@@ -891,91 +889,19 @@ export default function App() {
     }
   }, [activeTab, user]);
 
-  // Shows dentist notifications for new appointments regardless of who created them.
-  useEffect(() => {
-    if (user?.role !== 'dentist') {
-      dentistSeenAppointmentIdsRef.current = new Set();
-      dentistNotifInitializedRef.current = false;
-      return;
-    }
-
-    const myAppointments = appointments.filter(a => a.dentistId === user.id && a.status !== 'cancelled');
-    const currentIds = new Set(myAppointments.map(a => a.id));
-
-    if (!dentistNotifInitializedRef.current) {
-      // Only initialize seen IDs after we have received the initial appointments snapshot
-      if (!collectionsInitializedRef.current['appointments']) {
-        return;
-      }
-      dentistSeenAppointmentIdsRef.current = currentIds;
-      dentistNotifInitializedRef.current = true;
-      return;
-    }
-
-    const newAppointments = myAppointments.filter(a => !dentistSeenAppointmentIdsRef.current.has(a.id));
-    if (newAppointments.length > 0) {
-      const newNotifs = newAppointments.map((apt) => {
-        const patientName = patients.find(p => p.id === apt.patientId)?.name || 'Paciente';
-        return {
-          id: crypto.randomUUID().replace(/-/g,"").substring(0,9),
-          message: `Novo agendamento: ${patientName} em ${parseDate(apt.date).toLocaleDateString('pt-BR')} às ${apt.time}`,
-          type: 'success' as const,
-        };
-      });
-
-      newNotifs.forEach((notif) => addNotification(notif));
-    }
-
-    dentistSeenAppointmentIdsRef.current = currentIds;
-  }, [appointments, patients, user, activeTab]);
-
-  // Notify dentist of overdue / not-finalized appointments (past date, not completed/cancelled).
+  // Limpa notificações persistidas de atraso quando o agendamento é concluído, cancelado ou removido.
   useEffect(() => {
     if (user?.role !== 'dentist') return;
 
-    const myAppointments = appointments.filter(a => a.dentistId === user.id);
-    const now = new Date();
-
-    // Add notifications for overdue appointments
-    myAppointments.forEach(apt => {
-      if (!apt || !apt.id) return;
-      if (apt.status === 'completed' || apt.status === 'cancelled') {
-        return;
-      }
-      // build appointment DateTime
-      try {
-        const appDate = new Date(`${apt.date}T${apt.time}`);
-        if (isNaN(appDate.getTime())) return;
-
-        if (appDate < now) {
-          // overdue and not yet notified
-          if (!dentistOverdueNotifMapRef.current[apt.id] && !notifications.some(n => n.appointmentId === apt.id)) {
-            const patientName = patients.find(p => p.id === apt.patientId)?.name || 'Paciente';
-            const notif = {
-              id: `overdue-${apt.id}-${crypto.randomUUID().replace(/-/g,"").substring(0,9)}`,
-              message: `Agendamento não finalizado: ${patientName} em ${parseDate(apt.date).toLocaleDateString('pt-BR')} às ${apt.time}`,
-              type: 'info' as const
-            };
-            // persistent notification until dentist marks as completed/cancelled
-            addNotification(notif, { autoDismiss: false });
-            dentistOverdueNotifMapRef.current[apt.id] = notif.id;
-          }
+    notifications
+      .filter(notification => notification.appointmentId && notification.message.startsWith('Agendamento pendente:'))
+      .forEach((notification) => {
+        const appointment = appointments.find(item => item.id === notification.appointmentId);
+        if (!appointment || finalizedAppointmentStatuses.has(appointment.status)) {
+          void removeNotification(notification.id);
         }
-      } catch (e) {
-        // ignore parse errors
-      }
-    });
-
-    // Cleanup: remove notifications when appointment is completed/cancelled or removed
-    Object.keys(dentistOverdueNotifMapRef.current).forEach(aptId => {
-      const apt = appointments.find(a => a.id === aptId);
-      if (!apt || apt.status === 'completed' || apt.status === 'cancelled') {
-        const notifId = dentistOverdueNotifMapRef.current[aptId];
-        if (notifId) removeNotification(notifId);
-        delete dentistOverdueNotifMapRef.current[aptId];
-      }
-    });
-  }, [appointments, patients, user, notifications]);
+      });
+  }, [appointments, notifications, user]);
 
   // Firestore-backed notifications subscription for current user
   useEffect(() => {
@@ -1096,7 +1022,8 @@ export default function App() {
       a.dentistId === data.dentistId && 
       a.date === data.date && 
       a.time === data.time &&
-      a.status !== 'cancelled'
+      a.status !== 'cancelled' &&
+      a.status !== 'Cancelado'
     );
 
     if (conflict) {
@@ -1111,7 +1038,10 @@ export default function App() {
 
     const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
     const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
-    const dentistAuthUid = getAuthUidForUserId(data.dentistId) || null;
+    const dentistAuthUid = getAuthUidForUserId(data.dentistId)
+      || (user?.role === 'dentist' && user.id === data.dentistId ? auth.currentUser?.uid ?? null : null);
+    const patient = patients.find(p => p.id === data.patientId);
+    const patientName = patient?.name || 'Paciente';
 
     const newApt: Appointment = {
       ...data,
@@ -1122,11 +1052,25 @@ export default function App() {
     };
     
     try {
-      await setDoc(doc(db, 'appointments', id), newApt);
+      const batch = writeBatch(db);
+      batch.set(doc(db, 'appointments', id), newApt);
+
+      if (data.status !== 'blocked' && data.status !== 'Bloqueado' && dentistAuthUid) {
+        const notificationId = crypto.randomUUID().replace(/-/g,"").substring(0,9);
+        batch.set(doc(db, 'notifications', notificationId), {
+          userId: dentistAuthUid,
+          message: `Novo agendamento: ${patientName} às ${data.time}`,
+          type: 'success',
+          appointmentId: id,
+          createdAt: Date.now(),
+          read: false,
+        });
+      }
+
+      await batch.commit();
       logAction(data.status === 'blocked' ? 'Bloqueio de Horário' : 'Criação', 'appointment', newApt.id, `Agendamento para ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}.`);
 
       // Email notification
-      const patient = patients.find(p => p.id === data.patientId);
       const dentist = dentists.find(d => d.id === data.dentistId);
       const dentistName = dentist?.name || '';
       if (patient && data.status !== 'blocked') {

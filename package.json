@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
+    "notifications:check-overdue": "tsx scripts/check-overdue-appointments.ts",
     "cleanup:empty-users:dry": "tsx scripts/cleanup-empty-user-docs.ts",
     "cleanup:empty-users:apply": "tsx scripts/cleanup-empty-user-docs.ts --apply"
   },

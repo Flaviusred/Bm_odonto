@@ -32,12 +32,31 @@ service cloud.firestore {
       return role == 'attendant' || role == 'admin';
     }
 
+    function isNotificationTypeAllowed(type) {
+      return type == 'success' || type == 'info' || type == 'error' || type == 'warning';
+    }
+
     // --- Notifications: acesso restrito ao proprietário ---
     match /notifications/{notifId} {
-      // Criação: somente o usuário alvo pode criar sua própria notificação (client escreve userId=request.auth.uid)
+      // Criação: o próprio usuário pode criar lembretes próprios, e o criador de um
+      // agendamento pode gerar a notificação do dentista associado a esse appointment.
       allow create: if isSignedIn()
-                    && request.auth.uid == request.resource.data.userId
-                    && request.resource.data.keys().hasAll(['userId', 'message', 'type', 'createdAt']);
+                    && request.resource.data.keys().hasAll(['userId', 'message', 'type', 'createdAt', 'read'])
+                    && request.resource.data.keys().hasOnly(['userId', 'message', 'type', 'appointmentId', 'createdAt', 'read'])
+                    && request.resource.data.read == false
+                    && isNotificationTypeAllowed(request.resource.data.type)
+                    && (
+                      request.auth.uid == request.resource.data.userId
+                      || (
+                        request.resource.data.appointmentId is string
+                        && exists(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId))
+                        && request.resource.data.userId == get(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId)).data.dentistAuthUid
+                        && (
+                          isStaff()
+                          || request.auth.uid == get(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId)).data.patientAuthUid
+                        )
+                      )
+                    );
 
       // Leitura: somente o usuário destino (proprietário) pode ler suas notificações
       allow read: if isSignedIn() && request.auth.uid == resource.data.userId;
@@ -45,7 +64,7 @@ service cloud.firestore {
       // Atualização: permitir apenas marcar como lida (campo `read`) pelo proprietário
       allow update: if isSignedIn()
                     && request.auth.uid == resource.data.userId
-                    && request.resource.data.keys().hasOnly(['read'])
+                    && request.resource.data.diff(resource.data).changedKeys().hasOnly(['read'])
                     && request.resource.data.read == true;
 
       // Não permitir exclusão pelo cliente
