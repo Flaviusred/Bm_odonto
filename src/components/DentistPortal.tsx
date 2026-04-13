@@ -28,6 +28,12 @@ import {
 import { cn } from '../lib/utils';
 import { Toaster, toast } from 'sonner';
 
+const PDF_MAX_MB = 5;
+const RECORD_IMAGE_MAX_MB = 3;
+const PDF_MAX_BYTES = PDF_MAX_MB * 1024 * 1024;
+const RECORD_IMAGE_MAX_BYTES = RECORD_IMAGE_MAX_MB * 1024 * 1024;
+const RECORD_ALLOWED_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
+
 interface DentistPortalProps {
   activeTab: string;
   onTabChange?: (tab: string) => void;
@@ -341,13 +347,17 @@ export function DentistPortal({
     }
 
     // Validation
-    const allowedTypes = ['application/pdf', 'image/jpeg', 'image/png'];
-    if (!allowedTypes.includes(uploadForm.file.type)) {
+    if (!RECORD_ALLOWED_TYPES.includes(uploadForm.file.type)) {
       toast.error('Tipo de arquivo inválido. Apenas PDF, JPG ou PNG são permitidos.');
       return;
     }
-    if (uploadForm.file.size > 5 * 1024 * 1024) {
-      toast.error('Arquivo muito grande. O limite máximo é 5MB.');
+
+    const isPdf = uploadForm.file.type === 'application/pdf';
+    const maxBytes = isPdf ? PDF_MAX_BYTES : RECORD_IMAGE_MAX_BYTES;
+    const maxLabel = isPdf ? `${PDF_MAX_MB}MB` : `${RECORD_IMAGE_MAX_MB}MB`;
+
+    if (uploadForm.file.size > maxBytes) {
+      toast.error(`Arquivo muito grande. Limite para este tipo: ${maxLabel}.`);
       return;
     }
 
@@ -1026,13 +1036,14 @@ export function DentistPortal({
               type="file" 
               ref={fileInputRef} 
               className="hidden" 
+              accept="application/pdf,image/jpeg,image/png"
               onChange={e => setUploadForm({...uploadForm, file: e.target.files?.[0] || null})}
             />
             <Upload className="h-8 w-8 text-zinc-400 mx-auto mb-2" />
             <p className="text-sm font-medium text-zinc-700">
               {uploadForm.file ? uploadForm.file.name : 'Clique ou arraste o arquivo aqui'}
             </p>
-            <p className="text-xs text-zinc-400 mt-1">PDF, JPG ou PNG (Máx 5MB)</p>
+            <p className="text-xs text-zinc-400 mt-1">PDF até 5MB | Imagens (JPG/PNG) até 3MB</p>
           </div>
           <div className="flex flex-col sm:flex-row justify-end gap-3 pt-2">
              <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={() => setIsUploadModalOpen(false)}>Cancelar</Button>
