@@ -39,10 +39,5 @@ jobs:
       - name: Install Firebase CLI
         run: npm install -g firebase-tools
 
-      - name: Write service account credentials
-        run: echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > /tmp/sa.json
-
       - name: Deploy Hosting and Firestore Rules
-        run: firebase deploy --only hosting,firestore:rules --project odonto-490913 --non-interactive
-        env:
-          GOOGLE_APPLICATION_CREDENTIALS: /tmp/sa.json
+        run: firebase deploy --only hosting,firestore:rules --project odonto-490913 --non-interactive --token "${{ secrets.FIREBASE_TOKEN }}"
