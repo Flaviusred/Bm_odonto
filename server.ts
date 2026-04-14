@@ -824,13 +824,34 @@ const createTransportFromEnv = () => {
   }
 };
 
+const resolveMailHeaders = () => {
+  const provider = (process.env.SMTP_PROVIDER || 'gmail').toLowerCase();
+  const emailUser = (process.env.EMAIL_USER || '').trim();
+  const configuredFrom = (process.env.EMAIL_FROM || '').trim();
+
+  // Gmail costuma bloquear/spam quando o "from" não pertence à conta autenticada.
+  if (provider === 'gmail' && emailUser) {
+    return {
+      fromAddress: configuredFrom ? `Bravo Odonto <${emailUser}>` : emailUser,
+      replyTo: configuredFrom && configuredFrom.toLowerCase() !== emailUser.toLowerCase() ? configuredFrom : undefined,
+      provider,
+    };
+  }
+
+  return {
+    fromAddress: configuredFrom || emailUser || `no-reply@${process.env.DOMAIN || 'example.com'}`,
+    replyTo: undefined,
+    provider,
+  };
+};
+
 const sendEmail = async (to: string, subject: string, text?: string, html?: string) => {
   // Ensure at least one recipient and some configuration exists
   if (!to) {
     throw new Error("No recipient specified");
   }
 
-  const fromAddress = process.env.EMAIL_FROM || process.env.EMAIL_USER || `no-reply@${process.env.DOMAIN || "example.com"}`;
+  const { fromAddress, replyTo, provider } = resolveMailHeaders();
 
   let transporter;
   try {
@@ -925,6 +946,7 @@ const sendEmail = async (to: string, subject: string, text?: string, html?: stri
     }
 
     const mailOptions: any = { from: fromAddress, to, subject, attachments };
+    if (replyTo) mailOptions.replyTo = replyTo;
 
     // Prefer strings for text/html so nodemailer can add the charset
     // parameter automatically. Using Buffer for the text part can cause
@@ -952,9 +974,14 @@ const sendEmail = async (to: string, subject: string, text?: string, html?: stri
     } catch (dbg) { console.warn('mailOptions debug error', dbg); }
 
     const info = await transporter.sendMail(mailOptions);
+    const accepted = Array.isArray((info as any)?.accepted) ? (info as any).accepted : [];
+    const rejected = Array.isArray((info as any)?.rejected) ? (info as any).rejected : [];
+    if (accepted.length === 0 || rejected.length > 0) {
+      throw new Error(`SMTP accepted=${accepted.length} rejected=${rejected.length}`);
+    }
     console.log(`Email sent to ${to} (id=${(info as any).messageId})`);
     try {
-      await monitorEvent('email_sent', { to, messageId: (info as any)?.messageId, accepted: (info as any)?.accepted, rejected: (info as any)?.rejected, provider: process.env.SMTP_PROVIDER || process.env.EMAIL_PROVIDER || 'unknown' });
+      await monitorEvent('email_sent', { to, messageId: (info as any)?.messageId, accepted: (info as any)?.accepted, rejected: (info as any)?.rejected, provider });
     } catch (monErr) {
       console.warn('monitorEvent email_sent failed', monErr);
       try { appendDebugLog(`monitorEvent email_sent failed: ${monErr instanceof Error ? monErr.message : String(monErr)}`); } catch (e) {}
@@ -972,7 +999,7 @@ const sendEmail = async (to: string, subject: string, text?: string, html?: stri
 // Support sending raw MIME messages (multipart/related with inline image)
 const sendRawEmail = async (to: string, subject: string, text?: string, html?: string) => {
   if (!to) throw new Error('No recipient specified');
-  const fromAddress = process.env.EMAIL_FROM || process.env.EMAIL_USER || `no-reply@${process.env.DOMAIN || 'example.com'}`;
+  const { fromAddress, replyTo, provider } = resolveMailHeaders();
 
   let transporter;
   try { transporter = createTransportFromEnv(); } catch (err) { console.error('Transport configuration error (raw):', err); throw err; }
@@ -1101,11 +1128,16 @@ const sendRawEmail = async (to: string, subject: string, text?: string, html?: s
     const rawDbg = `raw email: to=${to} htmlPresent=${!!html} containsHeader=${rawContainsHeader(html || '')} rawSize=${rawMessage.length}`;
     console.log(rawDbg);
     appendDebugLog(rawDbg);
-    const info = await transporter.sendMail({ envelope: { from: fromAddress, to }, raw: rawMessage });
+    const info = await transporter.sendMail({ envelope: { from: fromAddress, to }, raw: rawMessage, ...(replyTo ? { replyTo } : {}) });
+    const accepted = Array.isArray((info as any)?.accepted) ? (info as any).accepted : [];
+    const rejected = Array.isArray((info as any)?.rejected) ? (info as any).rejected : [];
+    if (accepted.length === 0 || rejected.length > 0) {
+      throw new Error(`SMTP accepted=${accepted.length} rejected=${rejected.length} (raw)`);
+    }
     console.log(`Raw email sent to ${to} (id=${(info as any)?.messageId})`);
     appendDebugLog(`Raw email sent to ${to} id=${(info as any)?.messageId}`);
     try {
-      await monitorEvent('email_sent', { to, messageId: (info as any)?.messageId, provider: process.env.SMTP_PROVIDER || process.env.EMAIL_PROVIDER || 'unknown', raw: true });
+      await monitorEvent('email_sent', { to, messageId: (info as any)?.messageId, provider, raw: true, accepted: (info as any)?.accepted, rejected: (info as any)?.rejected });
     } catch (monErr) { appendDebugLog(`monitorEvent raw email_sent failed: ${monErr instanceof Error ? monErr.message : String(monErr)}`); }
     return info;
   } catch (err) {
