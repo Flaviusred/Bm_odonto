@@ -109,6 +109,28 @@ const appendDebugLog = (line: string) => {
   try { fs.appendFileSync(DEBUG_LOG_PATH, `${new Date().toISOString()} ${line}\n`); } catch (e) { /* ignore */ }
 };
 
+// Monitor events (email sends, cbmpb requests). Attempts to write to Firestore
+// collection `monitoring`. Falls back to the debug log file if Firestore isn't
+// available or on errors.
+const monitorEvent = async (type: string, details: any) => {
+  const evt = { type, details: details || {}, ts: new Date().toISOString() };
+  try {
+    appendDebugLog(`monitorEvent: ${JSON.stringify(evt)}`);
+  } catch (e) { /* ignore */ }
+
+  try {
+    if (db && typeof db.collection === 'function') {
+      try {
+        await db.collection('monitoring').add(evt);
+      } catch (err) {
+        appendDebugLog(`monitorEvent firestore add failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  } catch (e) {
+    try { appendDebugLog(`monitorEvent failed: ${e instanceof Error ? e.message : String(e)}`); } catch (e2) {}
+  }
+};
+
 app.use(express.json({ limit: '50mb' }));
 
 // Initial data structure
@@ -584,6 +606,9 @@ app.get("/api/cbmpb/:identifier", async (req, res) => {
     console.log(`Status: ${response.status}`);
     console.log(`Headers: ${JSON.stringify(Object.fromEntries(response.headers.entries()))}`);
     console.log(`Body: ${responseText}`);
+    try {
+      await monitorEvent('cbmpb_request', { identifier, url, status: response.status, responseLength: responseText ? responseText.length : 0 });
+    } catch (monErr) { appendDebugLog(`monitorEvent cbmpb_request failed: ${monErr instanceof Error ? monErr.message : String(monErr)}`); }
     
     // Status 203 com corpo vazio geralmente indica problema de permissão ou token inválido na API Bravo
     if (response.status === 203 && (!responseText || responseText.trim() === "")) {
@@ -610,7 +635,36 @@ app.get("/api/cbmpb/:identifier", async (req, res) => {
     }
   } catch (error) {
     console.error("Proxy error:", error);
+    try { await monitorEvent('cbmpb_error', { identifier, error: error instanceof Error ? error.message : String(error) }); } catch (e) {}
     res.status(500).json({ error: "Internal server error", details: error instanceof Error ? error.message : String(error) });
+  }
+});
+
+// Admin endpoint: fetch recent monitoring events (requires auth)
+app.get('/api/monitor/recent', requireAuth, async (req, res) => {
+  try {
+    const type = req.query.type ? String(req.query.type) : null;
+    const limit = Number(req.query.limit || 50);
+
+    if (!db) {
+      // Fallback: return last lines of debug log file
+      try {
+        if (!fs.existsSync(DEBUG_LOG_PATH)) return res.json([]);
+        const lines = fs.readFileSync(DEBUG_LOG_PATH, 'utf8').split(/\r?\n/).filter(Boolean);
+        return res.json(lines.slice(-limit).reverse());
+      } catch (e) {
+        return res.status(500).json({ error: 'monitoring unavailable', details: e instanceof Error ? e.message : String(e) });
+      }
+    }
+
+    let ref: any = db.collection('monitoring');
+    if (type) ref = ref.where('type', '==', type);
+    const snap = await ref.orderBy('ts', 'desc').limit(limit).get();
+    const items = snap.docs.map((d: any) => ({ id: d.id, ...(d.data ? d.data() : {}) }));
+    res.json(items);
+  } catch (err) {
+    console.error('/api/monitor/recent error', err);
+    res.status(500).json({ error: 'failed to read monitoring events', details: err instanceof Error ? err.message : String(err) });
   }
 });
 
@@ -899,9 +953,18 @@ const sendEmail = async (to: string, subject: string, text?: string, html?: stri
 
     const info = await transporter.sendMail(mailOptions);
     console.log(`Email sent to ${to} (id=${(info as any).messageId})`);
+    try {
+      await monitorEvent('email_sent', { to, messageId: (info as any)?.messageId, accepted: (info as any)?.accepted, rejected: (info as any)?.rejected, provider: process.env.SMTP_PROVIDER || process.env.EMAIL_PROVIDER || 'unknown' });
+    } catch (monErr) {
+      console.warn('monitorEvent email_sent failed', monErr);
+      try { appendDebugLog(`monitorEvent email_sent failed: ${monErr instanceof Error ? monErr.message : String(monErr)}`); } catch (e) {}
+    }
     return info;
   } catch (error) {
     console.error("Error sending email:", error);
+    try {
+      await monitorEvent('email_error', { to, error: error instanceof Error ? error.message : String(error) });
+    } catch (monErr) { /* ignore */ }
     throw error;
   }
 };
@@ -1041,10 +1104,14 @@ const sendRawEmail = async (to: string, subject: string, text?: string, html?: s
     const info = await transporter.sendMail({ envelope: { from: fromAddress, to }, raw: rawMessage });
     console.log(`Raw email sent to ${to} (id=${(info as any)?.messageId})`);
     appendDebugLog(`Raw email sent to ${to} id=${(info as any)?.messageId}`);
+    try {
+      await monitorEvent('email_sent', { to, messageId: (info as any)?.messageId, provider: process.env.SMTP_PROVIDER || process.env.EMAIL_PROVIDER || 'unknown', raw: true });
+    } catch (monErr) { appendDebugLog(`monitorEvent raw email_sent failed: ${monErr instanceof Error ? monErr.message : String(monErr)}`); }
     return info;
   } catch (err) {
     console.error('Error sending raw email:', err);
     appendDebugLog(`Raw send error to=${to} err=${err instanceof Error ? err.message : String(err)}`);
+    try { await monitorEvent('email_error', { to, error: err instanceof Error ? err.message : String(err), raw: true }); } catch (monErr) {}
     throw err;
   }
 };
