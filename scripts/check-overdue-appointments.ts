@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cert, getApps, initializeApp } from 'firebase-admin/app';
@@ -39,18 +39,36 @@ const __dirname = path.dirname(__filename);
 const firebaseConfigPath = path.resolve(__dirname, '../firebase-applet-config.json');
 const firebaseConfig = JSON.parse(readFileSync(firebaseConfigPath, 'utf8')) as { projectId: string; firestoreDatabaseId?: string };
 
-const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
+let serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT;
+// Fallback: allow using GOOGLE_APPLICATION_CREDENTIALS file on the server.
 if (!serviceAccountJson) {
-  throw new Error('FIREBASE_SERVICE_ACCOUNT não definido. Configure o secret no GitHub Actions.');
+  const gac = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (gac && existsSync(gac)) {
+    console.log('Using GOOGLE_APPLICATION_CREDENTIALS file for Firebase Admin credentials.');
+    serviceAccountJson = readFileSync(gac, 'utf8');
+  }
 }
 
-const serviceAccount = JSON.parse(serviceAccountJson);
+let serviceAccount: any = null;
+if (serviceAccountJson) {
+  try {
+    serviceAccount = JSON.parse(serviceAccountJson);
+  } catch (e) {
+    throw new Error('FIREBASE_SERVICE_ACCOUNT/GOOGLE_APPLICATION_CREDENTIALS contains invalid JSON');
+  }
+}
 
 if (!getApps().length) {
-  initializeApp({
-    credential: cert(serviceAccount),
-    projectId: firebaseConfig.projectId,
-  });
+  if (serviceAccount) {
+    initializeApp({
+      credential: cert(serviceAccount),
+      projectId: firebaseConfig.projectId,
+    });
+  } else {
+    // Attempt ADC (e.g., GOOGLE_APPLICATION_CREDENTIALS pointing to file)
+    console.log('No explicit service account provided — attempting Application Default Credentials (ADC).');
+    initializeApp({ projectId: firebaseConfig.projectId });
+  }
 }
 
 const db = getFirestore(undefined, firebaseConfig.firestoreDatabaseId || '(default)');
