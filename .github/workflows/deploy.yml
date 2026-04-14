@@ -33,6 +33,7 @@ jobs:
           VITE_EMAIL_FROM: ${{ secrets.VITE_EMAIL_FROM }}
           VITE_SMTP_PROVIDER: ${{ secrets.VITE_SMTP_PROVIDER }}
           VITE_GOOGLE_REDIRECT_URI: ${{ secrets.VITE_GOOGLE_REDIRECT_URI }}
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
         run: npm run build
 
       - name: Deploy to Firebase (using FIREBASE_TOKEN)

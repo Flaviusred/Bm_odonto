@@ -1,4 +1,5 @@
 import { runWithLoading } from '../lib/loadingStore';
+import { API_BASE } from '../lib/utils';
 
 export const emailService = {
   sendAppointmentEmail: async (patientEmail: string, subject: string, details: string) => {
@@ -17,7 +18,7 @@ export const emailService = {
           </div>
         `;
 
-        await fetch('/api/send-email', {
+        await fetch(`${API_BASE}/api/send-email`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ to: patientEmail, subject, text: details, html, raw: true })
@@ -42,7 +43,7 @@ export const emailService = {
       `;
 
       await runWithLoading(async () => {
-        await fetch('/api/send-email', {
+        await fetch(`${API_BASE}/api/send-email`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ to: userEmail, subject, text, html, raw: true })

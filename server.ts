@@ -133,6 +133,27 @@ const monitorEvent = async (type: string, details: any) => {
 
 app.use(express.json({ limit: '50mb' }));
 
+// CORS: permite que o Firebase Hosting (ou qualquer origem configurada em CORS_ORIGINS)
+// acesse as rotas /api/**. Em desenvolvimento, libera localhost.
+app.use((req: any, res: any, next: any) => {
+  const rawOrigins = process.env.CORS_ORIGINS || '';
+  const allowed = rawOrigins
+    .split(',')
+    .map((o: string) => o.trim())
+    .filter(Boolean);
+  // Sempre libera localhost em qualquer porta (desenvolvimento)
+  const origin: string = req.headers.origin || '';
+  const isLocalhost = /^https?:\/\/localhost(:\d+)?$/.test(origin);
+  if (isLocalhost || allowed.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+  }
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 // Initial data structure
 const initialData = {
   patients: [],

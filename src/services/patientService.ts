@@ -1,5 +1,6 @@
 import { Patient } from '../types';
 import { parseDate } from '../lib/dateUtils';
+import { API_BASE } from '../lib/utils';
 
 /**
  * Serviço para gerenciar dados de pacientes, incluindo integração com APIs externas.
@@ -11,7 +12,7 @@ export const patientService = {
    */
   async fetchCBMPBPatientData(identifier: string): Promise<{ titular: Partial<Patient>, dependentes: Partial<Patient>[] }> {
     try {
-      const response = await fetch(`/api/cbmpb/${identifier}`);
+      const response = await fetch(`${API_BASE}/api/cbmpb/${identifier}`);
       
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));

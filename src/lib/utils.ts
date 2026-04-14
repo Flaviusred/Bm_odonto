@@ -1,6 +1,12 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 
+/**
+ * Base URL do servidor Express. Em produção aponta para VITE_API_URL (ex: URL do Render).
+ * Em desenvolvimento fica vazio, fazendo chamadas relativas ao servidor local.
+ */
+export const API_BASE = ((import.meta as any).env?.VITE_API_URL as string || '').replace(/\/$/, '');
+
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }

@@ -26,6 +26,7 @@ import { Button } from './components/Button';
 import { Modal } from './components/Modal';
 import { Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
 import { emailService } from './services/emailService';
+import { API_BASE } from './lib/utils';
 import LoadingOverlay from './components/LoadingOverlay';
 import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
 import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField, orderBy, getDocs, writeBatch } from 'firebase/firestore';
@@ -1111,7 +1112,7 @@ export default function App() {
 
       // Request server to sync this appointment to connected Google Calendars
       try {
-        await fetch('/api/sync-appointment', {
+        await fetch(`${API_BASE}/api/sync-appointment`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ appointment: newApt })
@@ -1133,7 +1134,7 @@ export default function App() {
         const apt = appointments.find(a => a.id === id);
         if (apt) {
           const syncApt = { ...apt, status };
-          await fetch('/api/sync-appointment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appointment: syncApt }) });
+          await fetch(`${API_BASE}/api/sync-appointment`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appointment: syncApt }) });
         }
       } catch (syncErr) {
         console.warn('Failed to request calendar sync on status update', syncErr);
@@ -1171,7 +1172,7 @@ export default function App() {
       }
       // Request server to sync updated appointment
       try {
-        await fetch('/api/sync-appointment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appointment: updatedAppointment }) });
+        await fetch(`${API_BASE}/api/sync-appointment`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appointment: updatedAppointment }) });
       } catch (syncErr) {
         console.warn('Failed to request calendar sync on update', syncErr);
       }
