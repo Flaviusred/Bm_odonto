@@ -1,0 +1,44 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (Vite - inject VITE_* from repo secrets)
+        env:
+          VITE_SITE_URL: ${{ secrets.VITE_SITE_URL }}
+          VITE_DOMAIN: ${{ secrets.VITE_DOMAIN }}
+          VITE_EMAIL_FROM: ${{ secrets.VITE_EMAIL_FROM }}
+          VITE_SMTP_PROVIDER: ${{ secrets.VITE_SMTP_PROVIDER }}
+          VITE_GOOGLE_REDIRECT_URI: ${{ secrets.VITE_GOOGLE_REDIRECT_URI }}
+        run: npm run build
+
+      - name: Deploy to Firebase (using FIREBASE_TOKEN)
+        env:
+          FIREBASE_PROJECT: ${{ secrets.FIREBASE_PROJECT }}
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: npx firebase-tools@latest deploy --project "$FIREBASE_PROJECT" --token "$FIREBASE_TOKEN" --only hosting
+
+# Notes:
+# - Create the repository secrets listed in the README below before pushing.
+# - If you prefer a GCP service account key, add it as GCP_SA_KEY and authenticate
+#   with google-github-actions/auth instead of using FIREBASE_TOKEN.

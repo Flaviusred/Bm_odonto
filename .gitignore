@@ -8,3 +8,5 @@ coverage/
 !.env.example
 _cleanup/
 tmp/
+
+.env
