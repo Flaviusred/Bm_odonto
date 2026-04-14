@@ -21,8 +21,10 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install dependencies (skip optional)
-        run: npm ci --no-optional
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm i --no-save @rollup/rollup-linux-x64-gnu@4.59.0 @tailwindcss/oxide-linux-x64-gnu@4.2.2
 
       - name: Build (Vite - inject VITE_* from repo secrets)
         env:
