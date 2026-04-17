@@ -59,6 +59,23 @@ export function maskCEP(value: string) {
     .replace(/(-\d{3})\d+?$/, '$1');
 }
 
+/**
+ * Gera UUID compatível com contextos não-seguros (HTTP).
+ * Usa crypto.randomUUID() quando disponível, senão faz fallback via crypto.getRandomValues().
+ */
+export function safeRandomUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Fallback para contextos HTTP (não-seguros)
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
+  const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+
 export function maskCRO(value: string) {
   const v = value.toUpperCase().replace(/[^0-9A-Z]/g, '');
   const numbers = v.replace(/[^0-9]/g, '');
