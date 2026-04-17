@@ -26,7 +26,7 @@ import { Button } from './components/Button';
 import { Modal } from './components/Modal';
 import { Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
 import { emailService } from './services/emailService';
-import { API_BASE } from './lib/utils';
+import { API_BASE, safeRandomUUID } from './lib/utils';
 import LoadingOverlay from './components/LoadingOverlay';
 import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
 import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField, orderBy, getDocs, writeBatch } from 'firebase/firestore';
@@ -152,7 +152,7 @@ export default function App() {
       persist = false;
     }
 
-    const id = notif.id || crypto.randomUUID().replace(/-/g,"").substring(0,9);
+    const id = notif.id || safeRandomUUID().replace(/-/g,"").substring(0,9);
 
     if (persist && firebaseUid) {
       try {
@@ -300,7 +300,7 @@ export default function App() {
   }, [user]);
 
   const addUser = async (data: Omit<User, 'id'>) => {
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
+    const id = safeRandomUUID().replace(/-/g,"").substring(0,9);
     const email = data.email.trim().toLowerCase();
     const password = (data as any).password as string | undefined;
 
@@ -424,7 +424,7 @@ export default function App() {
 
   const logAction = async (action: string, entityType: AuditLog['entityType'], entityId?: string, details?: string) => {
     if (!user) return;
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
+    const id = safeRandomUUID().replace(/-/g,"").substring(0,9);
     const newLog: AuditLog = {
       id,
       userId: user.id,
@@ -633,7 +633,7 @@ export default function App() {
       return;
     }
     
-    const id = data.id || crypto.randomUUID().replace(/-/g,"").substring(0,9);
+    const id = data.id || safeRandomUUID().replace(/-/g,"").substring(0,9);
     const newPatient: Patient = {
       ...data,
       id,
@@ -724,7 +724,7 @@ export default function App() {
 
   // Dentist Handlers
   const addDentist = async (data: Omit<Dentist, 'id' | 'createdAt' | 'isActive'>) => {
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
+    const id = safeRandomUUID().replace(/-/g,"").substring(0,9);
     const password = (data as any).password as string | undefined;
     let authUid: string | undefined;
 
@@ -807,7 +807,7 @@ export default function App() {
 
   // Attendant Handlers
   const addAttendant = async (data: Omit<Attendant, 'id' | 'createdAt' | 'isActive'>) => {
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
+    const id = safeRandomUUID().replace(/-/g,"").substring(0,9);
     const password = (data as any).password as string | undefined;
     let authUid: string | undefined;
 
@@ -912,6 +912,11 @@ export default function App() {
       return;
     }
 
+    // Wait for Firebase Auth to finish initializing before subscribing.
+    // Without this guard, on page refresh `user` is restored from sessionStorage
+    // while `auth.currentUser` is still null, causing the subscription to be skipped permanently.
+    if (!firebaseAuthReady) return;
+
     // Only subscribe when there's an authenticated Firebase user — otherwise the onSnapshot will fail with permission errors.
     const firebaseUid = auth.currentUser?.uid;
     if (!firebaseUid) {
@@ -995,7 +1000,7 @@ export default function App() {
     } catch (e) {
       console.warn('Failed to subscribe to notifications', e);
     }
-  }, [user]);
+  }, [user, firebaseAuthReady]);
 
   const markAllNotificationsRead = async () => {
     if (!user) return;
@@ -1029,7 +1034,7 @@ export default function App() {
 
     if (conflict) {
       const newNotification = {
-        id: crypto.randomUUID().replace(/-/g,"").substring(0,9),
+        id: safeRandomUUID().replace(/-/g,"").substring(0,9),
         message: `Conflito de horário: Este dentista já possui um agendamento para este horário.`,
         type: 'info' as const
       };
@@ -1037,7 +1042,7 @@ export default function App() {
       return;
     }
 
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
+    const id = safeRandomUUID().replace(/-/g,"").substring(0,9);
     const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
     const dentistAuthUid = getAuthUidForUserId(data.dentistId)
       || (user?.role === 'dentist' && user.id === data.dentistId ? auth.currentUser?.uid ?? null : null);
@@ -1057,7 +1062,7 @@ export default function App() {
       batch.set(doc(db, 'appointments', id), newApt);
 
       if (data.status !== 'blocked' && data.status !== 'Bloqueado' && dentistAuthUid) {
-        const notificationId = crypto.randomUUID().replace(/-/g,"").substring(0,9);
+        const notificationId = safeRandomUUID().replace(/-/g,"").substring(0,9);
         batch.set(doc(db, 'notifications', notificationId), {
           userId: dentistAuthUid,
           message: `Novo agendamento: ${patientName} às ${data.time}`,
@@ -1093,16 +1098,16 @@ export default function App() {
             console.error('Falha ao enviar e-mail de agendamento', e);
           }
         } else {
-          const noEmailNotif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: `Paciente não possui e-mail cadastrado — notificação por e-mail não enviada.`, type: 'info' as const };
+          const noEmailNotif = { id: safeRandomUUID().replace(/-/g,"").substring(0,9), message: `Paciente não possui e-mail cadastrado — notificação por e-mail não enviada.`, type: 'info' as const };
           addNotification(noEmailNotif);
         }
 
-        const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Agendamento criado.', type: 'success' as const };
+        const notif = { id: safeRandomUUID().replace(/-/g,"").substring(0,9), message: 'Agendamento criado.', type: 'success' as const };
         addNotification(notif);
         // Mostrar confirmação na tela do paciente quando o agendamento for criado por ele
         if (user?.role === 'patient' && user.id === data.patientId) {
           const patientNotif = {
-            id: crypto.randomUUID().replace(/-/g,"").substring(0,9),
+            id: safeRandomUUID().replace(/-/g,"").substring(0,9),
             message: `Agendamento confirmado para ${parseDate(data.date).toLocaleDateString('pt-BR')} às ${data.time}.`,
             type: 'success' as const
           };
@@ -1198,7 +1203,7 @@ export default function App() {
 
   // Treatment Handlers
   const addTreatment = async (data: Omit<Treatment, 'id' | 'createdAt'>) => {
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
+    const id = safeRandomUUID().replace(/-/g,"").substring(0,9);
     const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
     const newTreatment: Treatment = {
       ...data,
@@ -1225,7 +1230,7 @@ export default function App() {
   };
 
   const addDocument = async (data: Omit<PatientDocument, 'id' | 'uploadedAt'>) => {
-    const id = crypto.randomUUID().replace(/-/g,"").substring(0,9);
+    const id = safeRandomUUID().replace(/-/g,"").substring(0,9);
     const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
     const newDoc: PatientDocument = {
       ...data,
@@ -1362,7 +1367,7 @@ export default function App() {
     try {
       await runWithLoading(async () => {
         // Gera token no cliente e escreve no Firestore via client SDK (não depende de Admin SDK).
-        const token = crypto.randomUUID();
+        const token = safeRandomUUID();
         const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hora
 
         await setDoc(doc(db, 'users', userToUpdate.id), {
@@ -1614,10 +1619,10 @@ export default function App() {
               onConfirmAppointment={async (id: string) => {
                 try {
                   await updateAppointmentStatus(id, 'confirmed');
-                  const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Agendamento confirmado com sucesso.', type: 'success' as const };
+                  const notif = { id: safeRandomUUID().replace(/-/g,"").substring(0,9), message: 'Agendamento confirmado com sucesso.', type: 'success' as const };
                   addNotification(notif);
                 } catch (err) {
-                  const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Falha ao confirmar agendamento.', type: 'info' as const };
+                  const notif = { id: safeRandomUUID().replace(/-/g,"").substring(0,9), message: 'Falha ao confirmar agendamento.', type: 'info' as const };
                   addNotification(notif);
                   console.error('Confirm appointment error', err);
                 }
@@ -1650,15 +1655,15 @@ export default function App() {
                         console.error('Falha ao enviar e-mail de cancelamento', e);
                       }
                     } else {
-                      const noEmailNotif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: `Paciente não possui e-mail cadastrado — notificação de cancelamento não enviada.`, type: 'info' as const };
+                      const noEmailNotif = { id: safeRandomUUID().replace(/-/g,"").substring(0,9), message: `Paciente não possui e-mail cadastrado — notificação de cancelamento não enviada.`, type: 'info' as const };
                       addNotification(noEmailNotif);
                     }
                   }
 
-                  const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Agendamento cancelado.', type: 'info' as const };
+                  const notif = { id: safeRandomUUID().replace(/-/g,"").substring(0,9), message: 'Agendamento cancelado.', type: 'info' as const };
                   addNotification(notif);
                 } catch (err) {
-                  const notif = { id: crypto.randomUUID().replace(/-/g,"").substring(0,9), message: 'Falha ao cancelar agendamento.', type: 'info' as const };
+                  const notif = { id: safeRandomUUID().replace(/-/g,"").substring(0,9), message: 'Falha ao cancelar agendamento.', type: 'info' as const };
                   addNotification(notif);
                   console.error('Cancel appointment error', err);
                 }
