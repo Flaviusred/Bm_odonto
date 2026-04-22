@@ -222,13 +222,19 @@ export default function App() {
 
   // Firestore Real-time Sync — reactivo ao estado de autenticação do Firebase
   const [firebaseAuthReady, setFirebaseAuthReady] = useState(false);
+  const [firebaseAuthUid, setFirebaseAuthUid] = useState<string | null>(null);
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, () => setFirebaseAuthReady(true));
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setFirebaseAuthReady(true);
+      setFirebaseAuthUid(u ? u.uid : null);
+    });
     return unsub;
   }, []);
 
   useEffect(() => {
     if (!firebaseAuthReady) return;
+    if (!firebaseAuthUid) return; // Firebase Auth precisa estar autenticado
+    if (!user) return;            // App user precisa estar setado (garante que users/{authUid} já existe no Firestore)
 
     const collections = [
       { name: 'patients', setter: setPatients },
@@ -268,7 +274,7 @@ export default function App() {
       unsubscribes.forEach(unsub => unsub());
       unsubscribeSettings();
     };
-  }, [db, firebaseAuthReady]);
+  }, [db, firebaseAuthReady, firebaseAuthUid, user?.id]);
 
   const updateReminderSettings = async (newSettings: typeof reminderSettings) => {
     try {
@@ -569,17 +575,44 @@ export default function App() {
           }
         }
 
-        const appUser = authUid
-          ? (users.find((u: any) => u.authUid === authUid) || users.find(u => u.email.toLowerCase() === email))
-          : legacySessionUser;
+        let appUser: any = legacySessionUser;
+        if (authUid) {
+          // Tenta pelo doc users/{authUid} direto (caso normal e pós-migração)
+          const directSnap = await getDoc(doc(db, 'users', authUid));
+          if (directSnap.exists()) {
+            appUser = { ...directSnap.data(), id: directSnap.id };
+          } else if (legacySessionUser) {
+            // Usuário legado: o documento existe com ID diferente do authUid.
+            // Usa o legacySessionUser já resolvido (que veio de patients/dentists/attendants).
+            appUser = legacySessionUser;
+          } else {
+            // Fallback por email — só tenta se as queries forem permitidas pelas regras
+            try {
+              const byEmailSnap = await getDocs(query(collection(db, 'users'), where('email', '==', email)));
+              if (!byEmailSnap.empty) {
+                appUser = { ...byEmailSnap.docs[0].data(), id: byEmailSnap.docs[0].id };
+              }
+            } catch (_) { /* permissão negada: appUser permanece null */ }
+          }
+        }
         if (!appUser) {
           await signOut(auth).catch(() => {});
           setLoginError('Conta autenticada, mas perfil não encontrado no sistema.');
           return;
         }
 
-        if (!(appUser as any).authUid) {
-          await setDoc(doc(db, 'users', appUser.id), { authUid }, { merge: true });
+        // Garante que users/{authUid} existe — as regras Firestore usam get(users/{authUid})
+        // para verificar o papel do usuário (isStaff/isAdmin). Se o documento está em um
+        // ID legado diferente do authUid, todas as coleções ficam bloqueadas.
+        if (authUid && appUser.id !== authUid) {
+          const canonicalData = { ...appUser, authUid, id: authUid };
+          delete canonicalData.password;
+          await setDoc(doc(db, 'users', authUid), canonicalData, { merge: true });
+          // Mantém authUid no doc legado para retrocompatibilidade
+          await setDoc(doc(db, 'users', appUser.id), { authUid }, { merge: true }).catch(() => {});
+          appUser = { ...canonicalData };
+        } else if (authUid && !(appUser as any).authUid) {
+          await setDoc(doc(db, 'users', authUid), { authUid }, { merge: true });
         }
 
         setUser(appUser);

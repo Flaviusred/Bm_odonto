@@ -15,9 +15,6 @@ export function subscribe(fn: Subscriber) {
 
 export function setLoading(v: boolean) {
   state = v;
-  if (process.env.NODE_ENV !== 'production') {
-    try { console.log(`[loadingStore] setLoading -> ${v}`); } catch (e) {}
-  }
   for (const fn of subscribers) {
     try { fn(state); } catch (e) { console.error('loading subscriber error', e); }
   }
