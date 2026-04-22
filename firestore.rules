@@ -76,11 +76,24 @@ service cloud.firestore {
       // Criação: somente quando o UID de autenticação corresponde (signup/migração)
       allow create: if isSignedIn() && (request.auth.uid == userId || request.auth.uid == request.resource.data.authUid);
 
-      // Leitura: cada usuário pode ver seu registro; staff (dentistas/atendentes) pode ver outros
-      allow read: if isSignedIn() && (request.auth.uid == userId || isStaff());
+      // Leitura de documento único: o próprio usuário, por authUid, por email, ou staff
+      allow get: if isSignedIn() && (
+        request.auth.uid == userId
+        || resource.data.authUid == request.auth.uid
+        || resource.data.email == request.auth.token.email
+        || isStaff()
+      );
 
-      // Atualização: o próprio usuário ou staff pode atualizar
-      allow update: if isSignedIn() && (request.auth.uid == userId || isStaff());
+      // Listagem (queries): qualquer usuário autenticado pode listar usuários.
+      // Necessário para login de migração (busca por email antes do documento {authUid} existir).
+      allow list: if isSignedIn();
+
+      // Atualização: o próprio usuário (por id ou authUid) ou staff pode atualizar
+      allow update: if isSignedIn() && (
+        request.auth.uid == userId
+        || resource.data.authUid == request.auth.uid
+        || isStaff()
+      );
 
       // Exclusão: bloqueada para clientes; gerencie via backend administrativo se necessário
       allow delete: if false;

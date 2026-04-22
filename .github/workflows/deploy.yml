@@ -42,6 +42,11 @@ jobs:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
         run: npx firebase-tools@latest deploy --project "$FIREBASE_PROJECT" --token "$FIREBASE_TOKEN" --only hosting
 
+      - name: Deploy Firestore Rules (named database)
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: node scripts/deploy-firestore-rules.cjs
+
 # Notes:
 # - Create the repository secrets listed in the README below before pushing.
 # - If you prefer a GCP service account key, add it as GCP_SA_KEY and authenticate

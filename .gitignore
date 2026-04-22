@@ -10,3 +10,6 @@ _cleanup/
 tmp/
 
 .env
+backup/deploy_only_2026-04-07/DEPLOY_VERCEL_RAILWAY.md
+.npmrc
+odonto-490913-firebase-adminsdk-fbsvc-2fc08f226d.json

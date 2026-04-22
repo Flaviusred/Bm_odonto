@@ -1,12 +1,7 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { createPortal } from 'react-dom';
 
 export default function LoadingOverlay() {
-  useEffect(() => {
-    try { console.log('[LoadingOverlay] mount'); } catch (e) {}
-    return () => { try { console.log('[LoadingOverlay] unmount'); } catch (e) {} };
-  }, []);
-
   if (typeof document === 'undefined') return null;
 
   const overlay = (
