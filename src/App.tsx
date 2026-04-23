@@ -1948,6 +1948,7 @@ export default function App() {
               onUpdateTreatment={updateTreatment}
               onAddDocument={addDocument}
               onUpdateAppointmentStatus={updateAppointmentStatus}
+              schedules={schedules}
               unseenCount={unseenCount}
               setUnseenCount={setUnseenCount}
               markAllNotificationsRead={markAllNotificationsRead}
