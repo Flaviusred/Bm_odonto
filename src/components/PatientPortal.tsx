@@ -33,9 +33,17 @@ export function PatientPortal({
 }: PatientPortalProps) {
   const dependents = allPatients.filter(p => p.dependentOf === patient.id);
   const patientAndDependentsIds = [patient.id, ...dependents.map(d => d.id)];
+  const normalizedPatientEmail = (patient.email || '').trim().toLowerCase();
   
-  const filteredAppointments = appointments.filter(a => patientAndDependentsIds.includes(a.patientId));
-  const filteredTreatments = treatments.filter(t => patientAndDependentsIds.includes(t.patientId));
+  const filteredAppointments = appointments.filter((a: any) =>
+    patientAndDependentsIds.includes(a.patientId)
+    || (patient.authUid && a.patientAuthUid === patient.authUid)
+    || (normalizedPatientEmail !== '' && (a.patientEmail || '').toLowerCase() === normalizedPatientEmail)
+  );
+  const filteredTreatments = treatments.filter((t: any) =>
+    patientAndDependentsIds.includes(t.patientId)
+    || (patient.authUid && t.patientAuthUid === patient.authUid)
+  );
   
   const [formData, setFormData] = useState({
     name: patient.name,

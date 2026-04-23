@@ -43,10 +43,53 @@ enum OperationType {
 }
 
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  // Log detalhado apenas no console do servidor/dev, sem expor info sensível para a UI
   const message = error instanceof Error ? error.message : String(error);
+  // Erros de permissão são esperados para usuários sem acesso à coleção — apenas loga, não crasha.
+  const isPermissionError = message.includes('Missing or insufficient permissions') ||
+    (error as any)?.code === 'permission-denied';
+  if (isPermissionError) {
+    console.warn(`Firestore [${operationType}] at ${path}: sem permissão (ignorado para este perfil).`);
+    return;
+  }
   console.error(`Firestore Error [${operationType}] at ${path}:`, message);
-  throw new Error(`Erro ao acessar dados (${operationType}: ${path}). Tente novamente.`);
+}
+
+function normalizeUsersCollection(rows: any[]): User[] {
+  const byAuthOrId = new Map<string, any>();
+  const score = (u: any) => {
+    let s = 0;
+    if (u?.authUid) s += 2;
+    if (u?.id && u?.authUid && u.id === u.authUid) s += 3;
+    if (u?.permissions && Array.isArray(u.permissions) && u.permissions.length > 0) s += 1;
+    return s;
+  };
+
+  rows.forEach((u: any) => {
+    const key = String(u?.authUid || u?.id || '').trim();
+    if (!key) return;
+    const existing = byAuthOrId.get(key);
+    if (!existing || score(u) >= score(existing)) {
+      byAuthOrId.set(key, u);
+    }
+  });
+
+  const byEmail = new Map<string, any>();
+  Array.from(byAuthOrId.values()).forEach((u: any) => {
+    const emailKey = String(u?.email || '').trim().toLowerCase();
+    if (!emailKey) return;
+    const existing = byEmail.get(emailKey);
+    if (!existing || score(u) >= score(existing)) {
+      byEmail.set(emailKey, u);
+    }
+  });
+
+  const result = Array.from(byAuthOrId.values()).filter((u: any) => {
+    const emailKey = String(u?.email || '').trim().toLowerCase();
+    if (!emailKey) return true;
+    return byEmail.get(emailKey) === u;
+  });
+
+  return result as User[];
 }
 
 export default function App() {
@@ -83,6 +126,7 @@ export default function App() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [treatments, setTreatments] = useState<Treatment[]>([]);
   const [documents, setDocuments] = useState<PatientDocument[]>([]);
+  const [patientLinkedIds, setPatientLinkedIds] = useState<string[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [schedules, setSchedules] = useState<DentistSchedule[]>([]);
@@ -236,45 +280,178 @@ export default function App() {
     if (!firebaseAuthUid) return; // Firebase Auth precisa estar autenticado
     if (!user) return;            // App user precisa estar setado (garante que users/{authUid} já existe no Firestore)
 
-    const collections = [
-      { name: 'patients', setter: setPatients },
-      { name: 'dentists', setter: setDentists },
-      { name: 'attendants', setter: setAttendants },
-      { name: 'appointments', setter: setAppointments },
-      { name: 'treatments', setter: setTreatments },
-      { name: 'documents', setter: setDocuments },
-      { name: 'inventory', setter: setInventory },
-      { name: 'announcements', setter: setAnnouncements },
-      { name: 'schedules', setter: setSchedules },
-      { name: 'movements', setter: setMovements },
-      { name: 'audit_logs', setter: setAuditLogs },
-      { name: 'users', setter: setUsers },
-    ];
+    const isPatient = user.role === 'patient';
+    const unsubscribes: (() => void)[] = [];
 
-    const unsubscribes = collections.map(({ name, setter }) => {
-      return onSnapshot(collection(db, name), (snapshot) => {
-        const data = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as any));
+    const subscribeAll = (name: string, setter: (data: any[]) => void) => {
+      const unsub = onSnapshot(collection(db, name), (snapshot) => {
+        const data = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as any));
+        if (name === 'users') {
+          setter(normalizeUsersCollection(data));
+        } else {
+          setter(data);
+        }
+        try { collectionsInitializedRef.current[name] = true; } catch (e) {}
+      }, (error) => {
+        handleFirestoreError(error, OperationType.LIST, name);
+      });
+      unsubscribes.push(unsub);
+    };
+
+    const subscribeFiltered = (name: string, setter: (data: any[]) => void, ...filters: import('firebase/firestore').QueryConstraint[]) => {
+      const q = query(collection(db, name), ...filters);
+      const unsub = onSnapshot(q, (snapshot) => {
+        const data = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as any));
         setter(data);
         try { collectionsInitializedRef.current[name] = true; } catch (e) {}
       }, (error) => {
         handleFirestoreError(error, OperationType.LIST, name);
       });
-    });
+      unsubscribes.push(unsub);
+    };
 
-    // Sync settings
-    const unsubscribeSettings = onSnapshot(doc(db, 'settings', 'reminders'), (doc) => {
-      if (doc.exists()) {
-        setReminderSettings(doc.data() as any);
+    const subscribeUnion = (
+      name: string,
+      setter: (data: any[]) => void,
+      queriesConfig: Array<{ key: string; filters: import('firebase/firestore').QueryConstraint[] }>
+    ) => {
+      const bucket = new Map<string, any[]>();
+      const flush = () => {
+        const merged = new Map<string, any>();
+        for (const rows of bucket.values()) {
+          rows.forEach((row) => merged.set(row.id, row));
+        }
+        const data = Array.from(merged.values());
+        setter(data);
+        try { collectionsInitializedRef.current[name] = true; } catch (e) {}
+      };
+
+      queriesConfig.forEach(({ key, filters }) => {
+        const q = query(collection(db, name), ...filters);
+        const unsub = onSnapshot(q, (snapshot) => {
+          const data = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as any));
+          bucket.set(key, data);
+          flush();
+        }, (error) => {
+          handleFirestoreError(error, OperationType.LIST, name);
+        });
+        unsubscribes.push(unsub);
+      });
+    };
+
+    if (isPatient) {
+      // Pacientes: consultas pelo authUid e por email para cobrir registros legados.
+      const normalizedEmail = (user.email || '').trim().toLowerCase();
+      const appointmentQueries: Array<{ key: string; filters: import('firebase/firestore').QueryConstraint[] }> = [
+        { key: 'byAuthUid', filters: [where('patientAuthUid', '==', firebaseAuthUid)] },
+      ];
+      if (normalizedEmail) {
+        appointmentQueries.push({ key: 'byEmail', filters: [where('patientEmail', '==', normalizedEmail)] });
       }
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'settings/reminders');
-    });
+      subscribeUnion('appointments', setAppointments, appointmentQueries);
+      subscribeUnion('treatments', setTreatments, [
+        { key: 'byAuthUid', filters: [where('patientAuthUid', '==', firebaseAuthUid)] },
+        { key: 'byUserId', filters: [where('patientId', '==', user.id)] },
+      ]);
+      subscribeUnion('documents', setDocuments, [
+        { key: 'byAuthUid', filters: [where('patientAuthUid', '==', firebaseAuthUid)] },
+        { key: 'byUserId', filters: [where('patientId', '==', user.id)] },
+      ]);
+      subscribeUnion('patients', setPatients, [
+        { key: 'byAuthUid', filters: [where('authUid', '==', firebaseAuthUid)] },
+        ...(normalizedEmail ? [{ key: 'byEmail', filters: [where('email', '==', normalizedEmail)] }] : []),
+      ]);
+      subscribeAll('announcements', setAnnouncements);
+      subscribeAll('users', setUsers);
+    } else {
+      // Staff: acesso completo
+      const staffCollections = [
+        { name: 'patients', setter: setPatients },
+        { name: 'dentists', setter: setDentists },
+        { name: 'attendants', setter: setAttendants },
+        { name: 'appointments', setter: setAppointments },
+        { name: 'treatments', setter: setTreatments },
+        { name: 'documents', setter: setDocuments },
+        { name: 'inventory', setter: setInventory },
+        { name: 'announcements', setter: setAnnouncements },
+        { name: 'schedules', setter: setSchedules },
+        { name: 'movements', setter: setMovements },
+        { name: 'audit_logs', setter: setAuditLogs },
+        { name: 'users', setter: setUsers },
+      ];
+      staffCollections.forEach(({ name, setter }) => subscribeAll(name, setter));
+
+      // Settings só para staff
+      const unsubSettings = onSnapshot(doc(db, 'settings', 'reminders'), (snap) => {
+        if (snap.exists()) setReminderSettings(snap.data() as any);
+      }, (error) => {
+        handleFirestoreError(error, OperationType.GET, 'settings/reminders');
+      });
+      unsubscribes.push(unsubSettings);
+    }
 
     return () => {
       unsubscribes.forEach(unsub => unsub());
-      unsubscribeSettings();
     };
   }, [db, firebaseAuthReady, firebaseAuthUid, user?.id]);
+
+  useEffect(() => {
+    if (!user || user.role !== 'patient') return;
+    const linked = new Set<string>();
+    if (user.id) linked.add(user.id);
+    patients.forEach((p: any) => {
+      if (p?.id) linked.add(p.id);
+    });
+    appointments.forEach((a: any) => {
+      if (a?.patientId) linked.add(a.patientId);
+    });
+    setPatientLinkedIds(Array.from(linked));
+  }, [user?.id, user?.role, patients, appointments]);
+
+  useEffect(() => {
+    if (!firebaseAuthReady || !firebaseAuthUid || !user || user.role !== 'patient') return;
+
+    const ids = patientLinkedIds.filter(Boolean);
+    if (ids.length === 0) return;
+
+    const unsubscribes: (() => void)[] = [];
+
+    const subscribeUnionByIds = (
+      name: string,
+      setter: (data: any[]) => void,
+      authUidField: 'patientAuthUid'
+    ) => {
+      const bucket = new Map<string, any[]>();
+      const flush = () => {
+        const merged = new Map<string, any>();
+        for (const rows of bucket.values()) {
+          rows.forEach((row) => merged.set(row.id, row));
+        }
+        setter(Array.from(merged.values()));
+      };
+
+      const qAuth = query(collection(db, name), where(authUidField, '==', firebaseAuthUid));
+      unsubscribes.push(onSnapshot(qAuth, (snap) => {
+        bucket.set('byAuthUid', snap.docs.map(d => ({ ...d.data(), id: d.id } as any)));
+        flush();
+      }, () => {}));
+
+      ids.forEach((id) => {
+        const qId = query(collection(db, name), where('patientId', '==', id));
+        unsubscribes.push(onSnapshot(qId, (snap) => {
+          bucket.set(`byPatientId:${id}`, snap.docs.map(d => ({ ...d.data(), id: d.id } as any)));
+          flush();
+        }, () => {}));
+      });
+    };
+
+    subscribeUnionByIds('treatments', setTreatments, 'patientAuthUid');
+    subscribeUnionByIds('documents', setDocuments, 'patientAuthUid');
+
+    return () => {
+      unsubscribes.forEach((u) => u());
+    };
+  }, [db, firebaseAuthReady, firebaseAuthUid, user?.id, user?.role, patientLinkedIds]);
 
   const updateReminderSettings = async (newSettings: typeof reminderSettings) => {
     try {
@@ -306,7 +483,6 @@ export default function App() {
   }, [user]);
 
   const addUser = async (data: Omit<User, 'id'>) => {
-    const id = safeRandomUUID().replace(/-/g,"").substring(0,9);
     const email = data.email.trim().toLowerCase();
     const password = (data as any).password as string | undefined;
 
@@ -315,6 +491,7 @@ export default function App() {
     }
 
     const authUid = await createAuthUserWithSecondaryApp(email, password);
+    const id = authUid;
     const newUser: User & { authUid?: string } = {
       ...(stripPassword(data as any) as Omit<User, 'id'>),
       id,
@@ -445,7 +622,11 @@ export default function App() {
     try {
       await setDoc(doc(db, 'audit_logs', id), newLog);
     } catch (error) {
-      console.error("Failed to log action to Firestore", error);
+      // Erro de permissão é esperado para usuários sem acesso a audit_logs (ex: pacientes)
+      const msg = error instanceof Error ? error.message : String(error);
+      if (!msg.includes('Missing or insufficient permissions') && (error as any)?.code !== 'permission-denied') {
+        console.error("Failed to log action to Firestore", error);
+      }
     }
   };
 
@@ -666,34 +847,41 @@ export default function App() {
       return;
     }
     
-    const id = data.id || safeRandomUUID().replace(/-/g,"").substring(0,9);
-    const newPatient: Patient = {
-      ...data,
-      id,
-      createdAt: new Date().toISOString(),
-      isActive: true
-    };
+    const baseId = data.id || safeRandomUUID().replace(/-/g,"").substring(0,9);
+    let createdPatientId = baseId;
+    let createdPatientName = data.name;
 
     try {
       await runWithLoading(async () => {
         // If provided, create an auth user first so we can store authUid on the patient record.
         const patientPassword = (data as any).password as string | undefined;
-        const hasEmail = !!(newPatient.email && newPatient.email.trim());
+        const normalizedPatientEmail = String(data.email || '').trim().toLowerCase();
+        const hasEmail = normalizedPatientEmail.length > 0;
         let authUid: string | undefined;
 
         if (hasEmail && patientPassword && patientPassword.length >= 6) {
-          authUid = await createAuthUserWithSecondaryApp(newPatient.email.trim().toLowerCase(), patientPassword);
+          authUid = await createAuthUserWithSecondaryApp(normalizedPatientEmail, patientPassword);
         }
+
+        const effectiveId = (!data.id && authUid && !data.dependentOf) ? authUid : baseId;
+        const newPatient: Patient = {
+          ...data,
+          id: effectiveId,
+          createdAt: new Date().toISOString(),
+          isActive: true
+        };
+        createdPatientId = effectiveId;
+        createdPatientName = newPatient.name;
 
         // include authUid on patient document when available
         const patientWithAuth: any = { ...newPatient, ...(authUid ? { authUid } : {}) };
-        await setDoc(doc(db, 'patients', id), patientWithAuth);
+        await setDoc(doc(db, 'patients', effectiveId), patientWithAuth);
 
         // Only create a corresponding `users` document for titulars (not for dependents)
         // This keeps the `users` collection contendo apenas os titulares.
         if (!newPatient.dependentOf) {
           const newUser: User & { authUid?: string } = {
-            id,
+            id: effectiveId,
             name: newPatient.name,
             email: newPatient.email,
             role: 'patient',
@@ -701,11 +889,11 @@ export default function App() {
             phone: newPatient.phone,
             ...(authUid ? { authUid } : {})
           };
-          await setDoc(doc(db, 'users', id), newUser);
+          await setDoc(doc(db, 'users', effectiveId), newUser);
         }
       });
 
-      logAction('Criação', 'patient', newPatient.id, `Paciente ${newPatient.name} criado.`);
+      logAction('Criação', 'patient', createdPatientId, `Paciente ${createdPatientName} criado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'patients');
     }
@@ -757,13 +945,14 @@ export default function App() {
 
   // Dentist Handlers
   const addDentist = async (data: Omit<Dentist, 'id' | 'createdAt' | 'isActive'>) => {
-    const id = safeRandomUUID().replace(/-/g,"").substring(0,9);
+    const baseId = safeRandomUUID().replace(/-/g,"").substring(0,9);
     const password = (data as any).password as string | undefined;
     let authUid: string | undefined;
 
     if (password && password.length >= 6) {
       authUid = await createAuthUserWithSecondaryApp(data.email.trim().toLowerCase(), password);
     }
+    const id = authUid || baseId;
 
     const newDentist: Dentist = {
       ...(stripPassword(data as any) as Omit<Dentist, 'id' | 'createdAt' | 'isActive'>),
@@ -840,13 +1029,14 @@ export default function App() {
 
   // Attendant Handlers
   const addAttendant = async (data: Omit<Attendant, 'id' | 'createdAt' | 'isActive'>) => {
-    const id = safeRandomUUID().replace(/-/g,"").substring(0,9);
+    const baseId = safeRandomUUID().replace(/-/g,"").substring(0,9);
     const password = (data as any).password as string | undefined;
     let authUid: string | undefined;
 
     if (password && password.length >= 6) {
       authUid = await createAuthUserWithSecondaryApp(data.email.trim().toLowerCase(), password);
     }
+    const id = authUid || baseId;
 
     const newAttendant: Attendant = {
       ...(stripPassword(data as any) as Omit<Attendant, 'id' | 'createdAt' | 'isActive'>),
@@ -1572,7 +1762,28 @@ export default function App() {
 
   const isPatient = user.role === 'patient';
   const isDentist = user.role === 'dentist';
-  const patientData = isPatient ? patients.find(p => p.id === user.id) : null;
+  const patientData = isPatient
+    ? (
+      patients.find((p: any) =>
+        p.id === user.id
+        || ((p as any).authUid && (p as any).authUid === user.id)
+        || ((p as any).email && user.email && String((p as any).email).toLowerCase() === String(user.email).toLowerCase())
+      )
+      || {
+        id: user.id,
+        name: user.name || 'Paciente',
+        email: user.email || '',
+        phone: (user as any).phone || '',
+        cpf: (user as any).cpf || '',
+        birthDate: '1970-01-01',
+        address: (user as any).address || '',
+        createdAt: (user as any).createdAt || new Date().toISOString(),
+        isActive: true,
+        patientType: 'civil' as const,
+        authUid: user.id,
+      }
+    )
+    : null;
   const patientAppointments = isPatient ? appointments.filter(a => a.patientId === user.id) : [];
   const patientTreatments = isPatient ? treatments.filter(t => t.patientId === user.id) : [];
 
@@ -1706,7 +1917,21 @@ export default function App() {
             <DentistPortal 
               activeTab={activeTab}
               onTabChange={setActiveTab}
-              dentist={dentists.find(d => d.id === user.id) || dentists[0]}
+              dentist={
+                (dentists.find((d: any) => d.id === user.id || ((d as any).authUid && (d as any).authUid === user.id)) as any)
+                || (dentists[0] as any)
+                || ({
+                  id: user.id,
+                  name: user.name || 'Dentista',
+                  email: user.email || '',
+                  phone: user.phone || '',
+                  specialty: 'Geral',
+                  cro: '',
+                  createdAt: new Date().toISOString(),
+                  isActive: true,
+                  authUid: user.id,
+                } as any)
+              }
               patients={patients}
               dentists={dentists}
               appointments={appointments}
