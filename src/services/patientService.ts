@@ -20,7 +20,6 @@ export const patientService = {
       }
       
       const responseData = await response.json();
-      console.log('API Response Data:', JSON.stringify(responseData));
       
       // Se a resposta for um objeto vazio, assume que o paciente não foi encontrado
       if (Object.keys(responseData).length === 0) {
