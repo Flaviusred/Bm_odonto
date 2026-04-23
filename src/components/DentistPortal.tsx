@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Patient, Appointment, Dentist, Treatment, PatientDocument } from '../types';
+import { User, Patient, Appointment, Dentist, Treatment, PatientDocument, DentistSchedule } from '../types';
 import { formatDateDDMMYYYY, parseDate, formatDateLocal } from '../lib/dateUtils';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './Card';
 import { Button } from './Button';
@@ -48,6 +48,7 @@ interface DentistPortalProps {
   onUpdateTreatment: (treatment: Treatment) => void;
   onAddDocument: (doc: Omit<PatientDocument, 'id' | 'uploadedAt'>) => void;
   onUpdateAppointmentStatus: (id: string, status: Appointment['status']) => void;
+  schedules: DentistSchedule[];
   unseenCount: number;
   setUnseenCount: React.Dispatch<React.SetStateAction<number>>;
   markAllNotificationsRead?: () => Promise<void> | (() => void);
@@ -71,6 +72,7 @@ export function DentistPortal({
   onUpdateTreatment,
   onAddDocument,
   onUpdateAppointmentStatus,
+  schedules,
   unseenCount, setUnseenCount,
   markAllNotificationsRead,
   notifications,
@@ -139,6 +141,68 @@ export function DentistPortal({
     time: '',
     notes: '',
   });
+
+  const [appointmentPatientSearch, setAppointmentPatientSearch] = useState('');
+  const [appointmentPatientDropdownOpen, setAppointmentPatientDropdownOpen] = useState(false);
+  const appointmentSearchRef = React.useRef<HTMLDivElement>(null);
+
+  // Fecha o dropdown ao clicar fora
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (appointmentSearchRef.current && !appointmentSearchRef.current.contains(e.target as Node)) {
+        setAppointmentPatientDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const normalize = (s: string) =>
+    (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+
+  const appointmentFilteredPatients = (() => {
+    const term = normalize(appointmentPatientSearch);
+    if (!term) return patients.slice(0, 50);
+    return patients.filter(p =>
+      normalize(p.name).includes(term) ||
+      (p.cpf || '').replace(/\D/g, '').includes(term.replace(/\D/g, ''))
+    );
+  })();
+
+  const appointmentSelectedPatient = patients.find(p => p.id === appointmentForm.patientId) || null;
+
+  const handleSelectAppointmentPatient = (p: Patient) => {
+    setAppointmentForm(prev => ({ ...prev, patientId: p.id }));
+    setAppointmentPatientSearch(p.name);
+    setAppointmentPatientDropdownOpen(false);
+  };
+
+  const handleClearAppointmentPatient = () => {
+    setAppointmentForm(prev => ({ ...prev, patientId: '' }));
+    setAppointmentPatientSearch('');
+    setAppointmentPatientDropdownOpen(false);
+  };
+
+  // Gera slots de horário com base na agenda do dentista para a data selecionada
+  const generateTimeSlotsForDate = (dateStr: string): string[] => {
+    if (!dateStr) return [];
+    const dayOfWeek = new Date(`${dateStr}T12:00:00`).getDay();
+    const schedule = schedules.find(
+      s => dentistLinkedIds.includes(s.dentistId) && s.dayOfWeek === dayOfWeek
+    );
+    if (!schedule) return [];
+
+    const slots: string[] = [];
+    const [sH, sM] = schedule.startTime.split(':').map(Number);
+    const [eH, eM] = schedule.endTime.split(':').map(Number);
+    let h = sH, m = sM;
+    while (h < eH || (h === eH && m < eM)) {
+      slots.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+      m += schedule.slotDuration;
+      while (m >= 60) { m -= 60; h += 1; }
+    }
+    return slots;
+  };
 
   const [expandedTreatments, setExpandedTreatments] = useState<string[]>([]);
   const [docFilter, setDocFilter] = useState('all');
@@ -656,8 +720,11 @@ export function DentistPortal({
                 </div>
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full lg:w-auto">
                   <Button onClick={() => {
-                    setSelectedPatient(null);
-                    setIsAppointmentModalOpen(true);
+                      setSelectedPatient(null);
+                      setAppointmentForm({ patientId: '', date: '', time: '', notes: '' });
+                      setAppointmentPatientSearch('');
+                      setAppointmentPatientDropdownOpen(false);
+                      setIsAppointmentModalOpen(true);
                   }} className="gap-2 text-xs h-10 w-full lg:w-auto">
                     <Plus className="h-4 w-4" /> Novo Agendamento
                   </Button>
@@ -852,7 +919,7 @@ export function DentistPortal({
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {patients.filter(p => (p.name || '').toLowerCase().includes(searchTerm.toLowerCase())).map(patient => (
+                {patients.filter(p => normalize(p.name || '').includes(normalize(searchTerm))).map(patient => (
                   <Card key={patient.id} className="border-none shadow-sm hover:ring-2 hover:ring-emerald-500 transition-all cursor-pointer" onClick={() => setSelectedPatient(patient)}>
                     <CardContent className="p-6">
                       <div className="flex items-center gap-4">
@@ -1001,39 +1068,149 @@ export function DentistPortal({
         </div>
       </Modal>
 
-      <Modal isOpen={isAppointmentModalOpen} onClose={() => setIsAppointmentModalOpen(false)} title="Agendar Consulta">
+      <Modal
+        isOpen={isAppointmentModalOpen}
+        onClose={() => {
+          setIsAppointmentModalOpen(false);
+          setAppointmentForm({ patientId: '', date: '', time: '', notes: '' });
+          setAppointmentPatientSearch('');
+          setAppointmentPatientDropdownOpen(false);
+        }}
+        title="Agendar Consulta"
+        closeOnBackdropClick={false}
+      >
         <form onSubmit={handleScheduleNext} className="space-y-4">
           {!selectedPatient && (
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-zinc-700">Paciente</label>
-              <select 
-                className="flex h-11 sm:h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                required
-                value={appointmentForm.patientId}
-                onChange={e => setAppointmentForm({...appointmentForm, patientId: e.target.value})}
-              >
-                <option value="">Selecione um paciente...</option>
-                {patients.map(p => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
+
+              {/* Autocomplete de paciente */}
+              <div ref={appointmentSearchRef} className="relative">
+                {appointmentSelectedPatient ? (
+                  /* Paciente já selecionado: exibe chip com botão para limpar */
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-emerald-400 bg-emerald-50">
+                    <UserRound className="h-4 w-4 text-emerald-600 shrink-0" />
+                    <span className="flex-1 text-sm font-medium text-emerald-900 truncate">{appointmentSelectedPatient.name}</span>
+                    <button
+                      type="button"
+                      onClick={handleClearAppointmentPatient}
+                      className="text-zinc-400 hover:text-red-500 transition-colors ml-1 shrink-0"
+                      aria-label="Limpar seleção"
+                    >
+                      <XCircle className="h-4 w-4" />
+                    </button>
+                  </div>
+                ) : (
+                  /* Campo de busca */
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      placeholder="Digite o nome ou CPF do paciente..."
+                      className="flex h-10 w-full rounded-xl border border-zinc-200 bg-white pl-9 pr-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                      value={appointmentPatientSearch}
+                      onChange={e => {
+                        setAppointmentPatientSearch(e.target.value);
+                        setAppointmentPatientDropdownOpen(true);
+                        if (!e.target.value) setAppointmentForm(prev => ({ ...prev, patientId: '' }));
+                      }}
+                      onFocus={() => setAppointmentPatientDropdownOpen(true)}
+                    />
+                  </div>
+                )}
+
+                {/* Dropdown de resultados */}
+                {appointmentPatientDropdownOpen && !appointmentSelectedPatient && (
+                  <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto rounded-xl border border-zinc-200 bg-white shadow-lg">
+                    {appointmentFilteredPatients.length === 0 ? (
+                      <div className="px-4 py-3 text-sm text-zinc-500 text-center">Nenhum paciente encontrado.</div>
+                    ) : (
+                      appointmentFilteredPatients.map(p => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          className="flex items-center gap-3 w-full px-4 py-2.5 text-left hover:bg-emerald-50 transition-colors border-b border-zinc-50 last:border-0"
+                          onMouseDown={e => { e.preventDefault(); handleSelectAppointmentPatient(p); }}
+                        >
+                          <UserRound className="h-4 w-4 text-zinc-400 shrink-0" />
+                          <div className="flex flex-col min-w-0">
+                            <span className="text-sm font-medium text-zinc-900 truncate">{p.name}</span>
+                            {p.cpf && <span className="text-xs text-zinc-400">{p.cpf}</span>}
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Campo hidden para validação required */}
+              <input type="text" required className="sr-only" readOnly tabIndex={-1} value={appointmentForm.patientId} aria-hidden="true" />
             </div>
           )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input label="Data" type="date" required value={appointmentForm.date} onChange={e => setAppointmentForm({...appointmentForm, date: e.target.value})} />
-            <Input label="Horário" type="time" required value={appointmentForm.time} onChange={e => setAppointmentForm({...appointmentForm, time: e.target.value})} />
+            <Input
+              label="Data"
+              type="date"
+              required
+              value={appointmentForm.date}
+              onChange={e => setAppointmentForm({ ...appointmentForm, date: e.target.value, time: '' })}
+            />
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-zinc-700">Horário</label>
+              {(() => {
+                const slots = generateTimeSlotsForDate(appointmentForm.date);
+                const takenTimes = new Set(
+                  myAppointments
+                    .filter(a => a.date === appointmentForm.date && a.status !== 'cancelled')
+                    .map(a => a.time)
+                );
+                if (appointmentForm.date && slots.length > 0) {
+                  return (
+                    <select
+                      className="flex h-11 sm:h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 disabled:opacity-50"
+                      required
+                      value={appointmentForm.time}
+                      onChange={e => setAppointmentForm({ ...appointmentForm, time: e.target.value })}
+                    >
+                      <option value="">Selecione um horário...</option>
+                      {slots.map(slot => (
+                        <option key={slot} value={slot} disabled={takenTimes.has(slot)}>
+                          {slot}{takenTimes.has(slot) ? ' — ocupado' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  );
+                }
+                return (
+                  <input
+                    type="time"
+                    required
+                    className="flex h-11 sm:h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                    value={appointmentForm.time}
+                    onChange={e => setAppointmentForm({ ...appointmentForm, time: e.target.value })}
+                  />
+                );
+              })()}
+              {appointmentForm.date && generateTimeSlotsForDate(appointmentForm.date).length === 0 && (
+                <p className="text-xs text-amber-600 mt-1">Sem agenda cadastrada para este dia. Insira o horário manualmente.</p>
+              )}
+            </div>
           </div>
+
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-zinc-700">Observações</label>
-            <textarea 
+            <textarea
               className="flex min-h-[80px] w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
               value={appointmentForm.notes}
-              onChange={e => setAppointmentForm({...appointmentForm, notes: e.target.value})}
+              onChange={e => setAppointmentForm({ ...appointmentForm, notes: e.target.value })}
             />
           </div>
           <div className="flex flex-col sm:flex-row justify-end gap-3 pt-4">
-             <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={() => setIsAppointmentModalOpen(false)}>Cancelar</Button>
-             <Button type="submit" className="w-full sm:w-auto">Confirmar Agendamento</Button>
+            <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={() => { setIsAppointmentModalOpen(false); setAppointmentPatientSearch(''); setAppointmentPatientDropdownOpen(false); handleClearAppointmentPatient(); }}>Cancelar</Button>
+            <Button type="submit" className="w-full sm:w-auto">Confirmar Agendamento</Button>
           </div>
         </form>
       </Modal>
