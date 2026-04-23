@@ -1712,6 +1712,7 @@ export default function App() {
                     type="email" 
                     placeholder="admin@odonto.com ou paciente@odonto.com" 
                     className="pl-10"
+                    autoComplete="username"
                     defaultValue="admin@odonto.com"
                     required 
                   />
@@ -1724,6 +1725,7 @@ export default function App() {
                     type="password" 
                     placeholder="••••••••" 
                     className="pl-10"
+                    autoComplete="current-password"
                     defaultValue="123456"
                     required 
                   />
@@ -1751,8 +1753,8 @@ export default function App() {
         </Modal>
         <Modal isOpen={isResetPasswordOpen} onClose={() => setIsResetPasswordOpen(false)} title="Redefinir Senha" closeOnBackdropClick={false}>
           <div className="space-y-4">
-            <Input label="Nova senha" type="password" value={resetNewPassword} onChange={(e) => setResetNewPassword(e.target.value)} />
-            <Input label="Confirme a nova senha" type="password" value={resetConfirmPassword} onChange={(e) => setResetConfirmPassword(e.target.value)} />
+            <Input label="Nova senha" type="password" autoComplete="new-password" value={resetNewPassword} onChange={(e) => setResetNewPassword(e.target.value)} />
+            <Input label="Confirme a nova senha" type="password" autoComplete="new-password" value={resetConfirmPassword} onChange={(e) => setResetConfirmPassword(e.target.value)} />
             <Button onClick={handleCompleteReset} className="w-full">Redefinir senha</Button>
           </div>
         </Modal>
