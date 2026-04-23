@@ -79,6 +79,22 @@ export function DentistPortal({
   removeNotification
 }: DentistPortalProps) {
   const dentistId = (dentist as any)?.id || '';
+  const dentistAuthUid = String((dentist as any)?.authUid || '').trim();
+  const dentistLegacyId = String((dentist as any)?.legacyId || '').trim();
+  const dentistEmail = String((dentist as any)?.email || '').trim().toLowerCase();
+  const dentistLinkedIds = Array.from(new Set(
+    dentists
+      .filter((d: any) =>
+        d?.id === dentistId
+        || (dentistLegacyId !== '' && String(d?.id || '') === dentistLegacyId)
+        || (dentistAuthUid !== '' && String(d?.authUid || '') === dentistAuthUid)
+        || (dentistEmail !== '' && String(d?.email || '').toLowerCase() === dentistEmail)
+      )
+      .map((d: any) => d.id)
+      .filter(Boolean)
+      .concat(dentistId ? [dentistId] : [])
+      .concat(dentistLegacyId ? [dentistLegacyId] : [])
+  ));
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
@@ -268,8 +284,13 @@ export function DentistPortal({
     file: null as File | null,
   });
 
-  const myAppointments = dentistId ? appointments.filter(a => a.dentistId === dentistId) : [];
-  const myTreatments = dentistId ? treatments.filter(t => t.dentistId === dentistId) : [];
+  const myAppointments = appointments.filter((a: any) =>
+    (a?.dentistId && dentistLinkedIds.includes(a.dentistId))
+    || (dentistAuthUid !== '' && String(a?.dentistAuthUid || '') === dentistAuthUid)
+  );
+  const myTreatments = treatments.filter((t: any) =>
+    t?.dentistId && dentistLinkedIds.includes(t.dentistId)
+  );
 
   const getPatientName = (id: string) => patients.find(p => p.id === id)?.name || 'Paciente';
   const getDentistName = (id: string) => dentists.find(d => d.id === id)?.name || 'Dentista';

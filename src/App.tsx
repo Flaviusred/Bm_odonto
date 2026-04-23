@@ -365,10 +365,9 @@ export default function App() {
       subscribeAll('users', setUsers);
     } else {
       // Staff: acesso completo
-      const staffCollections = [
+      const staffCollections: Array<{ name: string; setter: (data: any[]) => void }> = [
         { name: 'patients', setter: setPatients },
         { name: 'dentists', setter: setDentists },
-        { name: 'attendants', setter: setAttendants },
         { name: 'appointments', setter: setAppointments },
         { name: 'treatments', setter: setTreatments },
         { name: 'documents', setter: setDocuments },
@@ -379,6 +378,9 @@ export default function App() {
         { name: 'audit_logs', setter: setAuditLogs },
         { name: 'users', setter: setUsers },
       ];
+      if (user.role === 'admin' || user.role === 'attendant') {
+        staffCollections.splice(2, 0, { name: 'attendants', setter: setAttendants });
+      }
       staffCollections.forEach(({ name, setter }) => subscribeAll(name, setter));
 
       // Settings só para staff
@@ -762,6 +764,33 @@ export default function App() {
           const directSnap = await getDoc(doc(db, 'users', authUid));
           if (directSnap.exists()) {
             appUser = { ...directSnap.data(), id: directSnap.id };
+            // Enriquecimento do usuário canônico: se já existia users/{authUid},
+            // ainda pode faltar o vínculo com o ID legado usado nos agendamentos antigos.
+            try {
+              const byEmailSnap = await getDocs(query(collection(db, 'users'), where('email', '==', email)));
+              const legacyDoc = byEmailSnap.docs.find((item) => item.id !== authUid);
+              if (legacyDoc) {
+                const legacyData: any = legacyDoc.data();
+                appUser = {
+                  ...legacyData,
+                  ...appUser,
+                  id: authUid,
+                  authUid,
+                  legacyId: (appUser as any).legacyId || legacyDoc.id,
+                };
+                await setDoc(doc(db, 'users', authUid), {
+                  legacyId: legacyDoc.id,
+                  authUid,
+                  role: appUser.role,
+                  name: appUser.name,
+                  email: appUser.email,
+                  phone: appUser.phone || legacyData.phone || '',
+                  permissions: appUser.permissions || legacyData.permissions || [],
+                }, { merge: true });
+              }
+            } catch (_) {
+              // Se a consulta por email falhar, mantém o usuário canônico atual.
+            }
           } else if (legacySessionUser) {
             // Usuário legado: o documento existe com ID diferente do authUid.
             // Usa o legacySessionUser já resolvido (que veio de patients/dentists/attendants).
@@ -786,7 +815,8 @@ export default function App() {
         // para verificar o papel do usuário (isStaff/isAdmin). Se o documento está em um
         // ID legado diferente do authUid, todas as coleções ficam bloqueadas.
         if (authUid && appUser.id !== authUid) {
-          const canonicalData = { ...appUser, authUid, id: authUid };
+          const legacyId = appUser.id;
+          const canonicalData = { ...appUser, authUid, legacyId, id: authUid };
           delete canonicalData.password;
           await setDoc(doc(db, 'users', authUid), canonicalData, { merge: true });
           // Mantém authUid no doc legado para retrocompatibilidade
@@ -1919,10 +1949,21 @@ export default function App() {
             <DentistPortal 
               activeTab={activeTab}
               onTabChange={setActiveTab}
-              dentist={
-                (dentists.find((d: any) => d.id === user.id || ((d as any).authUid && (d as any).authUid === user.id)) as any)
-                || (dentists[0] as any)
-                || ({
+              dentist={(() => {
+                const normalizedUserEmail = String(user.email || '').trim().toLowerCase();
+                const found = dentists.find((d: any) =>
+                  d.id === user.id
+                  || (((d as any).authUid && (d as any).authUid === user.id))
+                  || (normalizedUserEmail !== '' && String((d as any).email || '').trim().toLowerCase() === normalizedUserEmail)
+                ) as any;
+                if (found) {
+                  return {
+                    ...found,
+                    authUid: (found as any).authUid || user.id,
+                    legacyId: (user as any).legacyId || ((found as any).id !== user.id ? (found as any).id : (found as any).legacyId),
+                  } as any;
+                }
+                return (dentists[0] as any) || ({
                   id: user.id,
                   name: user.name || 'Dentista',
                   email: user.email || '',
@@ -1932,8 +1973,9 @@ export default function App() {
                   createdAt: new Date().toISOString(),
                   isActive: true,
                   authUid: user.id,
-                } as any)
-              }
+                  legacyId: (user as any).legacyId,
+                } as any);
+              })()}
               patients={patients}
               dentists={dentists}
               appointments={appointments}
