@@ -4,8 +4,10 @@ import path from "path";
 import fs from "fs";
 import cron from "node-cron";
 import nodemailer from "nodemailer";
+import { randomUUID } from "crypto";
 import dotenv from "dotenv";
 import adminModule from 'firebase-admin';
+import { getFirestore } from 'firebase-admin/firestore';
 // Some environments/packagers expose firebase-admin as a default export,
 // others as the module namespace. Normalize to `admin` variable.
 const admin: any = (adminModule as any)?.default || adminModule;
@@ -58,7 +60,6 @@ try {
     // Usa named database quando disponível (mesma database do client SDK)
     if (FIREBASE_DATABASE_ID) {
       try {
-        const { getFirestore } = require('firebase-admin/firestore');
         db = getFirestore(adminApp, FIREBASE_DATABASE_ID);
         console.log(`Firestore admin conectado ao database: ${FIREBASE_DATABASE_ID}`);
       } catch (namedDbErr) {
@@ -250,6 +251,90 @@ const getTokensForUserFirebase = async (userId: string, role: 'dentist' | 'patie
   } catch (e) {
     console.warn('Failed to read tokens from Firestore', e);
     return null;
+  }
+};
+
+const normalizeCpf = (value: unknown) => String(value || '').replace(/\D/g, '');
+
+const uniqueNonEmptyStrings = (values: unknown[]) => Array.from(new Set(
+  values
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+));
+
+const findPasswordResetTarget = async (email: string, cpf: string) => {
+  if (!db || typeof db.collection !== 'function') {
+    throw new Error('Firestore indisponível no servidor.');
+  }
+
+  const emailCandidates = uniqueNonEmptyStrings([email, email.toLowerCase()]);
+  const userMatches = new Map<string, any>();
+
+  for (const candidate of emailCandidates) {
+    const userSnap = await db.collection('users').where('email', '==', candidate).get();
+    userSnap.forEach((item: any) => {
+      userMatches.set(item.id, item);
+    });
+  }
+
+  for (const item of userMatches.values()) {
+    const data = item.data() || {};
+    if (normalizeCpf(data.cpf) !== cpf) continue;
+    return {
+      id: item.id,
+      authUid: data.authUid || item.id,
+      email: String(data.email || email).trim().toLowerCase(),
+      name: String(data.name || '').trim(),
+    };
+  }
+
+  const patientMatches = new Map<string, any>();
+
+  for (const candidate of emailCandidates) {
+    const patientSnap = await db.collection('patients').where('email', '==', candidate).get();
+    patientSnap.forEach((item: any) => {
+      patientMatches.set(item.id, item);
+    });
+  }
+
+  for (const item of patientMatches.values()) {
+    const data = item.data() || {};
+    if (normalizeCpf(data.cpf) !== cpf) continue;
+
+    const possibleUserIds = uniqueNonEmptyStrings([item.id, data.authUid]);
+    for (const userId of possibleUserIds) {
+      const userSnap = await db.collection('users').doc(userId).get();
+      if (userSnap.exists) {
+        const userData = userSnap.data() || {};
+        return {
+          id: userSnap.id,
+          authUid: userData.authUid || data.authUid || userSnap.id,
+          email: String(userData.email || data.email || email).trim().toLowerCase(),
+          name: String(userData.name || data.name || '').trim(),
+        };
+      }
+    }
+
+    return {
+      id: item.id,
+      authUid: data.authUid || item.id,
+      email: String(data.email || email).trim().toLowerCase(),
+      name: String(data.name || '').trim(),
+    };
+  }
+
+  return null;
+};
+
+const updatePasswordMirrorIfExists = async (collectionName: 'patients' | 'dentists' | 'attendants', userId: string, newPassword: string) => {
+  try {
+    const ref = db.collection(collectionName).doc(userId);
+    const snap = await ref.get();
+    if (snap.exists) {
+      await ref.update({ password: newPassword });
+    }
+  } catch (err) {
+    console.warn(`Falha ao atualizar senha espelhada em ${collectionName}/${userId}:`, err);
   }
 };
 
@@ -485,23 +570,39 @@ app.post("/api/send-email", async (req, res) => {
   }
 });
 
-// Endpoint legado mantido como fallback — a lógica principal foi movida para o cliente.
-// Recebe { email, name, resetLink } e apenas envia o e-mail via nodemailer (sem Firestore).
 app.post('/api/forgot-password', async (req, res) => {
-  const { email, name, resetLink } = req.body || {};
+  const { email, cpf, name, resetLink, origin } = req.body || {};
   const normalizedEmail = String(email || '').trim().toLowerCase();
+  const normalizedCpf = normalizeCpf(cpf);
 
   console.log(`/api/forgot-password -> email=${normalizedEmail}`);
   appendDebugLog(`/api/forgot-password -> email=${normalizedEmail}`);
 
-  if (!normalizedEmail) {
-    return res.status(400).json({ error: 'email é obrigatório' });
+  if (!normalizedEmail || !normalizedCpf) {
+    return res.status(400).json({ error: 'email e cpf são obrigatórios' });
   }
 
   try {
+    const targetUser = await findPasswordResetTarget(normalizedEmail, normalizedCpf);
+    if (!targetUser) {
+      appendDebugLog(`/api/forgot-password: nenhuma conta compatível para ${normalizedEmail}`);
+      return res.json({ status: 'ok' });
+    }
+
+    const token = randomUUID();
+    const expiresAt = Date.now() + 60 * 60 * 1000;
+    const link = String(resetLink || `${String(origin || process.env.APP_ORIGIN || `http://localhost:${PORT}`).trim()}/?resetToken=${token}&uid=${targetUser.id}`);
+
+    await db.collection('users').doc(targetUser.id).set({
+      authUid: targetUser.authUid,
+      email: targetUser.email,
+      name: targetUser.name,
+      passwordResetToken: token,
+      passwordResetExpires: expiresAt,
+    }, { merge: true });
+
     const subject = 'Recuperação de senha - Bravo Odonto';
-    const displayName = String(name || '');
-    const link = String(resetLink || '');
+    const displayName = String(targetUser.name || name || '');
     const text = `Olá ${displayName},\n\nRecebemos uma solicitação para redefinir sua senha. Acesse o link abaixo:\n\n${link}\n\nO link expira em 1 hora. Se não solicitou, ignore este e-mail.`;
     const htmlBody = `
       <p>Olá <strong>${displayName}</strong>,</p>
@@ -514,7 +615,7 @@ app.post('/api/forgot-password', async (req, res) => {
       <hr/>
       <p style="font-size:12px;color:#666"><strong>Por segurança, não compartilhe este link com ninguém.</strong></p>
     `;
-    const info = await sendRawEmail(normalizedEmail, subject, text, htmlBody);
+    const info = await sendRawEmail(targetUser.email, subject, text, htmlBody);
     console.log(`/api/forgot-password: e-mail enviado -> messageId=${(info as any)?.messageId}`);
     appendDebugLog(`/api/forgot-password: e-mail enviado -> messageId=${(info as any)?.messageId}`);
     return res.json({ status: 'ok' });
@@ -522,6 +623,70 @@ app.post('/api/forgot-password', async (req, res) => {
     console.error('/api/forgot-password error:', err);
     appendDebugLog(`/api/forgot-password error: ${err}`);
     return res.status(500).json({ error: 'Erro ao enviar e-mail de recuperação.', details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/reset-password/complete', async (req, res) => {
+  const uid = String(req.body?.uid || '').trim();
+  const token = String(req.body?.token || '').trim();
+  const newPassword = String(req.body?.newPassword || '');
+
+  if (!uid || !token || !newPassword) {
+    return res.status(400).json({ error: 'uid, token e newPassword são obrigatórios' });
+  }
+
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: 'A senha deve ter pelo menos 6 caracteres.' });
+  }
+
+  try {
+    if (!db || typeof db.collection !== 'function') {
+      throw new Error('Firestore indisponível no servidor.');
+    }
+
+    const userRef = db.collection('users').doc(uid);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) {
+      return res.status(400).json({ error: 'Token inválido ou usuário não encontrado.' });
+    }
+
+    const userData = userSnap.data() || {};
+    if (!userData.passwordResetToken || userData.passwordResetToken !== token) {
+      return res.status(400).json({ error: 'Token inválido.' });
+    }
+
+    if (!userData.passwordResetExpires || userData.passwordResetExpires < Date.now()) {
+      return res.status(400).json({ error: 'Token expirado.' });
+    }
+
+    const authUidCandidates = uniqueNonEmptyStrings([userData.authUid, uid]);
+    for (const authUid of authUidCandidates) {
+      try {
+        await admin.auth().updateUser(authUid, { password: newPassword });
+        break;
+      } catch (authErr: any) {
+        if (authErr?.code === 'auth/user-not-found') {
+          continue;
+        }
+        throw authErr;
+      }
+    }
+
+    await userRef.set({
+      password: newPassword,
+      passwordResetToken: '',
+      passwordResetExpires: null,
+    }, { merge: true });
+
+    await updatePasswordMirrorIfExists('patients', uid, newPassword);
+    await updatePasswordMirrorIfExists('dentists', uid, newPassword);
+    await updatePasswordMirrorIfExists('attendants', uid, newPassword);
+
+    return res.json({ status: 'ok' });
+  } catch (err) {
+    console.error('/api/reset-password/complete error:', err);
+    appendDebugLog(`/api/reset-password/complete error: ${err instanceof Error ? err.message : String(err)}`);
+    return res.status(500).json({ error: 'Erro ao redefinir a senha.', details: err instanceof Error ? err.message : String(err) });
   }
 });
 

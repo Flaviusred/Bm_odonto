@@ -1594,49 +1594,18 @@ export default function App() {
       return;
     }
 
-    // Busca localmente — evita depender do Firestore server-side (Admin SDK sem service account).
-    let userToUpdate: any = users.find(
-      (u: any) => u.email && u.email.toLowerCase() === email && u.cpf && u.cpf.replace(/\D/g, '') === cpf
-    );
-    if (!userToUpdate) {
-      const patientMatch = patients.find(
-        (p: any) => p.email && p.email.toLowerCase() === email && p.cpf && p.cpf.replace(/\D/g, '') === cpf
-      );
-      if (patientMatch) {
-        userToUpdate = users.find((u: any) => u.id === patientMatch.id) ||
-          { id: patientMatch.id, email: patientMatch.email, name: patientMatch.name };
-      }
-    }
-
-    if (!userToUpdate) {
-      // Mensagem genérica para não revelar se o e-mail existe.
-      alert('Se o e-mail e CPF corresponderem a uma conta, você receberá um link de recuperação de senha em instantes.');
-      setIsForgotPasswordOpen(false);
-      setForgotPasswordEmail('');
-      setForgotPasswordCpf('');
-      return;
-    }
-
     try {
       await runWithLoading(async () => {
-        // Gera token no cliente e escreve no Firestore via client SDK (não depende de Admin SDK).
-        const token = safeRandomUUID();
-        const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hora
+        const response = await fetch(`${API_BASE}/api/forgot-password`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, cpf, origin: window.location.origin }),
+        });
 
-        await setDoc(doc(db, 'users', userToUpdate.id), {
-          passwordResetToken: token,
-          passwordResetExpires: expiresAt,
-        }, { merge: true });
-
-        const origin = window.location.origin;
-        const resetLink = `${origin}/?resetToken=${token}&uid=${userToUpdate.id}`;
-
-        // Envia e-mail via servidor (nodemailer).
-        await emailService.sendPasswordResetEmail(
-          String(userToUpdate.email).toLowerCase(),
-          resetLink,
-          userToUpdate.name || ''
-        );
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || 'Falha ao iniciar a recuperação de senha.');
+        }
       });
 
       alert('Se o e-mail e CPF corresponderem a uma conta, você receberá um link de recuperação de senha em instantes. Verifique sua caixa de entrada e a pasta de spam.');
@@ -1678,32 +1647,25 @@ export default function App() {
     }
 
     try {
-      const userSnap = await getDoc(doc(db, 'users', resetUid));
-      if (!userSnap.exists()) {
-        alert('Token inválido ou usuário não encontrado.');
-        return;
-      }
-      const data = userSnap.data() as any;
-      if (!data.passwordResetToken || data.passwordResetToken !== resetToken) {
-        alert('Token inválido.');
-        return;
-      }
-      if (!data.passwordResetExpires || data.passwordResetExpires < Date.now()) {
-        alert('Token expirado.');
-        return;
-      }
+      await runWithLoading(async () => {
+        const response = await fetch(`${API_BASE}/api/reset-password/complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid: resetUid, token: resetToken, newPassword: resetNewPassword }),
+        });
 
-      await setDoc(doc(db, 'users', resetUid), { password: resetNewPassword, passwordResetToken: '', passwordResetExpires: null }, { merge: true });
-      await updateDoc(doc(db, 'patients', resetUid), { password: resetNewPassword }).catch(() => {});
-      await updateDoc(doc(db, 'dentists', resetUid), { password: resetNewPassword }).catch(() => {});
-      await updateDoc(doc(db, 'attendants', resetUid), { password: resetNewPassword }).catch(() => {});
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || 'Falha ao redefinir a senha.');
+        }
+      });
 
       alert('Senha redefinida com sucesso. Você já pode entrar usando a nova senha.');
       setIsResetPasswordOpen(false);
       setResetNewPassword('');
       setResetConfirmPassword('');
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, `users/${resetUid}`);
+      alert(error instanceof Error ? error.message : 'Falha ao redefinir a senha.');
     }
   };
 
