@@ -78,6 +78,7 @@ export function DentistPortal({
   toggleNotificationsPanel,
   removeNotification
 }: DentistPortalProps) {
+  const dentistId = (dentist as any)?.id || '';
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
@@ -267,8 +268,8 @@ export function DentistPortal({
     file: null as File | null,
   });
 
-  const myAppointments = appointments.filter(a => a.dentistId === dentist.id);
-  const myTreatments = treatments.filter(t => t.dentistId === dentist.id);
+  const myAppointments = dentistId ? appointments.filter(a => a.dentistId === dentistId) : [];
+  const myTreatments = dentistId ? treatments.filter(t => t.dentistId === dentistId) : [];
 
   const getPatientName = (id: string) => patients.find(p => p.id === id)?.name || 'Paciente';
   const getDentistName = (id: string) => dentists.find(d => d.id === id)?.name || 'Dentista';
@@ -310,7 +311,7 @@ export function DentistPortal({
 
     onAddTreatment({
       patientId: selectedPatient.id,
-      dentistId: dentist.id,
+      dentistId,
       appointmentId: currentAppointment.id,
       ...treatmentForm,
     });
@@ -328,7 +329,7 @@ export function DentistPortal({
 
     onAddAppointment({
       patientId: pId,
-      dentistId: dentist.id,
+      dentistId,
       date: appointmentForm.date,
       time: appointmentForm.time,
       notes: appointmentForm.notes,
