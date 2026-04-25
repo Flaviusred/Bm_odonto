@@ -22,14 +22,20 @@ service cloud.firestore {
              : null;
     }
 
+    // Conta bootstrap para recuperação operacional quando users/{authUid}
+    // ainda não foi criado corretamente durante migração.
+    function isBootstrapAdmin() {
+      return isSignedIn() && request.auth.token.email == 'admin@odonto.com';
+    }
+
     function isStaff() {
       let role = getUserRole();
-      return role == 'dentist' || role == 'attendant' || role == 'admin';
+      return role == 'dentist' || role == 'attendant' || role == 'admin' || isBootstrapAdmin();
     }
 
     function isAdmin() {
       let role = getUserRole();
-      return role == 'attendant' || role == 'admin';
+      return role == 'attendant' || role == 'admin' || isBootstrapAdmin();
     }
 
     function isNotificationTypeAllowed(type) {
@@ -95,8 +101,8 @@ service cloud.firestore {
         || isStaff()
       );
 
-      // Exclusão: bloqueada para clientes; gerencie via backend administrativo se necessário
-      allow delete: if false;
+      // Exclusão permitida para administradores
+      allow delete: if isSignedIn() && isAdmin();
     }
 
     // --- Patients (prontuários) ---

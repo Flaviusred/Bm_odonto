@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { 
   Users, 
   Calendar, 
@@ -36,6 +37,12 @@ interface DashboardProps {
 }
 
 export function Dashboard({ patients, appointments, treatments, dentists }: DashboardProps) {
+  const [chartsReady, setChartsReady] = useState(false);
+  useEffect(() => {
+    const id = requestAnimationFrame(() => setChartsReady(true));
+    return () => cancelAnimationFrame(id);
+  }, []);
+
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
   
@@ -108,6 +115,7 @@ export function Dashboard({ patients, appointments, treatments, dentists }: Dash
             </CardTitle>
           </CardHeader>
           <CardContent className="h-[300px]">
+            {!chartsReady ? <div className="h-full w-full" /> : (
             <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
               <AreaChart data={chartData}>
                 <defs>
@@ -125,6 +133,7 @@ export function Dashboard({ patients, appointments, treatments, dentists }: Dash
                 <Area type="monotone" dataKey="appointments" stroke="#10b981" fillOpacity={1} fill="url(#colorApp)" strokeWidth={2} />
               </AreaChart>
             </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
 
@@ -173,6 +182,7 @@ export function Dashboard({ patients, appointments, treatments, dentists }: Dash
             </CardTitle>
           </CardHeader>
           <CardContent className="h-[300px]">
+            {!chartsReady ? <div className="h-full w-full" /> : (
             <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
               <PieChart>
                 <Pie data={statusData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} fill="#8884d8" label>
@@ -182,6 +192,7 @@ export function Dashboard({ patients, appointments, treatments, dentists }: Dash
                 <Legend />
               </PieChart>
             </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
 
@@ -193,6 +204,7 @@ export function Dashboard({ patients, appointments, treatments, dentists }: Dash
             </CardTitle>
           </CardHeader>
           <CardContent className="h-[300px]">
+            {!chartsReady ? <div className="h-full w-full" /> : (
             <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
               <BarChart data={dentistData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
@@ -202,6 +214,7 @@ export function Dashboard({ patients, appointments, treatments, dentists }: Dash
                 <Bar dataKey="value" fill="#3b82f6" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
       </div>
