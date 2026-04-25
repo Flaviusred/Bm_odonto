@@ -1272,9 +1272,35 @@ async function startServer() {
         });
       });
     } else {
-      app.use(express.static(distPath));
-      app.get("*", (_req, res) => {
+    const distPath = path.join(process.cwd(), "dist");
+    const indexPath = path.join(distPath, "index.html");
+
+    if (!fs.existsSync(distPath) || !fs.existsSync(indexPath)) {
+      const diagnosticMessage =
+        "Build de frontend ausente: pasta dist/index.html nao encontrada. Rode 'npm run build' antes de iniciar em producao.";
+      console.error(diagnosticMessage);
+
+      // Se der erro, responde em qualquer rota dentro de bravoOdonto
+      app.get("/bravoOdonto*", (_req, res) => {
+        res.status(503).json({
+          error: "Frontend build ausente",
+          details: diagnosticMessage,
+          expectedPath: indexPath,
+        });
+      });
+    } else {
+      // 1. Servir arquivos estáticos (JS, CSS, Imagens) sob o prefixo /bravoOdonto
+      app.use("/bravoOdonto", express.static(distPath));
+
+      // 2. Rota para o index.html (SPA) para qualquer sub-rota de bravoOdonto
+      // Isso permite que o F5 funcione em https://bravo.bombeiros.pb.gov.br/bravoOdonto/agendamentos
+      app.get("/bravoOdonto*", (_req, res) => {
         res.sendFile(indexPath);
+      });
+
+      // 3. Redirecionamento opcional: se alguém digitar sem a barra no final
+      app.get("/bravoOdonto", (_req, res) => {
+        res.redirect("/bravoOdonto/");
       });
     }
   }
