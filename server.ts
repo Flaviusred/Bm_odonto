@@ -771,7 +771,7 @@ app.get("/api/cbmpb/:identifier", async (req, res) => {
   console.log(`Token detectado (Tamanho: ${token.length}): ${token.substring(0, 10)}...${token.substring(token.length - 10)}`);
 
   try {
-    const url = `https://bravo.bombeiros.pb.gov.br/api/v1/pbsaude/servidor/${identifier}`;
+    const url = `https://d4440cee8bce.sn.mynetname.net:3000/bravo.bombeiros.pb.gov.br/api/v1/pbsaude/servidor/${identifier}`;
     console.log(`Buscando em: ${url}`);
     
     const response = await fetch(url, {
