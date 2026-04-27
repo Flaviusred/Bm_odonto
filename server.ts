@@ -155,6 +155,17 @@ app.use((req: any, res: any, next: any) => {
   next();
 });
 
+// Strip /bravoOdonto prefix when the external proxy forwards requests with the subpath intact
+// (e.g. reverse proxy sends /bravoOdonto/api/... directly to Node.js on port 3000)
+app.use((req: any, _res: any, next: any) => {
+  if (req.url.startsWith('/bravoOdonto/')) {
+    req.url = req.url.slice('/bravoOdonto'.length);
+  } else if (req.url === '/bravoOdonto') {
+    req.url = '/';
+  }
+  next();
+});
+
 // Initial data structure
 const initialData = {
   patients: [],
