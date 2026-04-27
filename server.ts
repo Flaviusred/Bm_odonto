@@ -153,6 +153,17 @@ const monitorEvent = async (type: string, details: any) => {
 
 app.use(express.json({ limit: '50mb' }));
 
+// Some reverse proxies may forward duplicated slashes (e.g. //api/...)
+// which prevents Express routes from matching. Normalize the URL path first.
+app.use((req: any, _res: any, next: any) => {
+  const [rawPath, ...rawQuery] = String(req.url || '/').split('?');
+  const normalizedPath = rawPath.replace(/\/+/g, '/');
+  if (normalizedPath !== rawPath) {
+    req.url = normalizedPath + (rawQuery.length ? `?${rawQuery.join('?')}` : '');
+  }
+  next();
+});
+
 // CORS: permite que o Firebase Hosting (ou qualquer origem configurada em CORS_ORIGINS)
 // acesse as rotas /api/**. Em desenvolvimento, libera localhost.
 app.use((req: any, res: any, next: any) => {
