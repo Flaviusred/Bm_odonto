@@ -549,6 +549,31 @@ export default function App() {
     }
   };
 
+  const syncAuthPassword = async (userId: string, newPassword: string, email?: string) => {
+    const trimmedPassword = String(newPassword || '').trim();
+    if (!trimmedPassword) return;
+
+    const currentAuthUser = auth.currentUser;
+    if (!currentAuthUser) {
+      throw new Error('Sessão expirada. Faça login novamente para atualizar a senha.');
+    }
+
+    const idToken = await currentAuthUser.getIdToken();
+    const response = await fetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({ newPassword: trimmedPassword, email: email || '' }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Falha ao atualizar senha no Firebase Auth.');
+    }
+  };
+
   const updateUser = async (updated: User) => {
     console.log('Updating user:', updated);
     
@@ -560,15 +585,15 @@ export default function App() {
     // Atualização no Firebase Firestore
     try {
       await runWithLoading(async () => {
+        if ((updated as any).password) {
+          await syncAuthPassword(updated.id, String((updated as any).password), updated.email);
+        }
+
         const userRef = doc(db, 'users', updated.id);
         const safeUpdated = stripPassword(updated as any);
         await setDoc(userRef, safeUpdated, { merge: true });
         await setDoc(userRef, { password: deleteField() }, { merge: true });
         console.log('Usuário atualizado no Firestore com sucesso');
-
-        if ((updated as any).password && updated.email) {
-          await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
-        }
 
         // If user is a dentist, update the dentist record too
         if (updated.role === 'dentist') {
@@ -1035,6 +1060,10 @@ export default function App() {
 
   const updateDentist = async (updated: Dentist) => {
     try {
+      if ((updated as any).password) {
+        await syncAuthPassword(updated.id, String((updated as any).password), updated.email);
+      }
+
       const safeUpdated = stripPassword(updated as any);
       await setDoc(doc(db, 'dentists', updated.id), safeUpdated, { merge: true });
       await setDoc(doc(db, 'dentists', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
@@ -1047,9 +1076,6 @@ export default function App() {
         phone: updated.phone
       }, { merge: true });
       await setDoc(userRef, { password: deleteField() }, { merge: true }).catch(() => {});
-      if ((updated as any).password && updated.email) {
-        await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
-      }
       
       logAction('Edição', 'dentist', updated.id, `Dentista ${updated.name} atualizado.`);
     } catch (error) {
@@ -1109,6 +1135,10 @@ export default function App() {
 
   const updateAttendant = async (updated: Attendant) => {
     try {
+      if ((updated as any).password) {
+        await syncAuthPassword(updated.id, String((updated as any).password), updated.email);
+      }
+
       const safeUpdated = stripPassword(updated as any);
       await setDoc(doc(db, 'attendants', updated.id), safeUpdated, { merge: true });
       await setDoc(doc(db, 'attendants', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
@@ -1121,9 +1151,6 @@ export default function App() {
         phone: updated.phone
       }, { merge: true });
       await setDoc(userRef, { password: deleteField() }, { merge: true }).catch(() => {});
-      if ((updated as any).password && updated.email) {
-        await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
-      }
       
       logAction('Edição', 'attendant', updated.id, `Atendente ${updated.name} atualizado.`);
     } catch (error) {

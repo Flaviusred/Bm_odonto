@@ -101,6 +101,25 @@ const requireAuth = async (req: any, res: any, next: any) => {
   }
 };
 
+const getRoleForFirebaseUid = async (firebaseUid: string): Promise<string | null> => {
+  if (!db || typeof db.collection !== 'function') return null;
+
+  const directSnap = await db.collection('users').doc(firebaseUid).get();
+  if (directSnap.exists) {
+    const data = directSnap.data() || {};
+    return String((data as any).role || '').trim() || null;
+  }
+
+  const byAuthUidSnap = await db.collection('users').where('authUid', '==', firebaseUid).limit(1).get();
+  if (!byAuthUidSnap.empty) {
+    const doc = byAuthUidSnap.docs[0];
+    const data = doc.data() || {};
+    return String((data as any).role || '').trim() || null;
+  }
+
+  return null;
+};
+
 // Simple file-based debug logger for email flows (helps capture logs when
 // server output isn't visible in the terminal session)
 const DEBUG_LOG_DIR = path.join(process.cwd(), 'tmp');
@@ -556,6 +575,81 @@ app.put("/api/users/:id", requireAuth, (req: any, res: any) => {
   data.users[userIndex] = { ...data.users[userIndex], ...updatedUser };
   saveData(data);
   res.json({ status: "ok", user: data.users[userIndex] });
+});
+
+app.post('/api/admin/users/:id/password', requireAuth, async (req: any, res: any) => {
+  const targetUserId = String(req.params?.id || '').trim();
+  const newPassword = String(req.body?.newPassword || '');
+  const targetEmail = String(req.body?.email || '').trim().toLowerCase();
+  const requesterUid = String(req.firebaseUser?.uid || '').trim();
+
+  if (!targetUserId || !newPassword) {
+    return res.status(400).json({ error: 'id e newPassword são obrigatórios' });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: 'A senha deve ter pelo menos 6 caracteres.' });
+  }
+  if (!db || typeof db.collection !== 'function') {
+    return res.status(500).json({ error: 'Firestore indisponível no servidor.' });
+  }
+
+  try {
+    const requesterRole = await getRoleForFirebaseUid(requesterUid);
+    if (requesterRole !== 'admin') {
+      return res.status(403).json({ error: 'Apenas administradores podem alterar senha de outros usuários.' });
+    }
+
+    const targetUserRef = db.collection('users').doc(targetUserId);
+    const targetUserSnap = await targetUserRef.get();
+    const targetUserData = targetUserSnap.exists ? (targetUserSnap.data() || {}) : {};
+
+    const authUidCandidates = uniqueNonEmptyStrings([
+      (targetUserData as any).authUid,
+      targetUserId,
+      req.body?.authUid,
+    ]);
+
+    if (targetEmail) {
+      try {
+        const byEmail = await admin.auth().getUserByEmail(targetEmail);
+        if (byEmail?.uid) authUidCandidates.push(byEmail.uid);
+      } catch (e: any) {
+        if (e?.code !== 'auth/user-not-found') throw e;
+      }
+    }
+
+    let updatedAuthUid: string | null = null;
+    for (const authUid of uniqueNonEmptyStrings(authUidCandidates)) {
+      try {
+        await admin.auth().updateUser(authUid, { password: newPassword });
+        updatedAuthUid = authUid;
+        break;
+      } catch (authErr: any) {
+        if (authErr?.code === 'auth/user-not-found') continue;
+        throw authErr;
+      }
+    }
+
+    if (!updatedAuthUid) {
+      return res.status(404).json({ error: 'Usuário de autenticação não encontrado para atualização de senha.' });
+    }
+
+    await targetUserRef.set({
+      authUid: updatedAuthUid,
+      password: newPassword,
+      passwordResetToken: '',
+      passwordResetExpires: null,
+    }, { merge: true });
+
+    await updatePasswordMirrorIfExists('patients', targetUserId, newPassword);
+    await updatePasswordMirrorIfExists('dentists', targetUserId, newPassword);
+    await updatePasswordMirrorIfExists('attendants', targetUserId, newPassword);
+
+    return res.json({ status: 'ok' });
+  } catch (err) {
+    console.error('/api/admin/users/:id/password error:', err);
+    return res.status(500).json({ error: 'Falha ao atualizar senha no Auth.', details: err instanceof Error ? err.message : String(err) });
+  }
 });
 
 // API Routes
