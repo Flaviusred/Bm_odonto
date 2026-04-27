@@ -577,8 +577,8 @@ export default function App() {
             name: updated.name,
             email: updated.email,
             phone: updated.phone || '',
-            cro: (updated as any).cro,
-            specialty: (updated as any).specialty
+            cro: (updated as any).cro || '',
+            specialty: (updated as any).specialty || ''
           }, { merge: true });
           await setDoc(dentistRef, { password: deleteField() }, { merge: true }).catch(() => {});
         } else if (updated.role === 'attendant') {
