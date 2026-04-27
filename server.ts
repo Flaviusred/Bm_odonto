@@ -592,6 +592,7 @@ app.post('/api/admin/users/:id/password', requireAuth, async (req: any, res: any
   const targetUserId = String(req.params?.id || '').trim();
   const newPassword = String(req.body?.newPassword || '');
   const targetEmail = String(req.body?.email || '').trim().toLowerCase();
+  const previousEmail = String(req.body?.previousEmail || '').trim().toLowerCase();
   const requesterUid = String(req.firebaseUser?.uid || '').trim();
 
   if (!targetUserId || !newPassword) {
@@ -614,15 +615,45 @@ app.post('/api/admin/users/:id/password', requireAuth, async (req: any, res: any
     const targetUserSnap = await targetUserRef.get();
     const targetUserData = targetUserSnap.exists ? (targetUserSnap.data() || {}) : {};
 
+    const emailCandidates = uniqueNonEmptyStrings([
+      targetEmail,
+      previousEmail,
+      (targetUserData as any).email,
+    ].map((value) => String(value || '').trim().toLowerCase()));
+
     const authUidCandidates = uniqueNonEmptyStrings([
       (targetUserData as any).authUid,
       targetUserId,
       req.body?.authUid,
     ]);
 
-    if (targetEmail) {
+    const collectCandidatesFromDoc = (snap: any) => {
+      if (!snap || !snap.exists) return;
+      const data = snap.data() || {};
+      authUidCandidates.push(String((data as any).authUid || ''));
+      emailCandidates.push(String((data as any).email || '').trim().toLowerCase());
+    };
+
+    const directCollections: Array<'users' | 'patients' | 'dentists' | 'attendants'> = ['users', 'patients', 'dentists', 'attendants'];
+    for (const collectionName of directCollections) {
+      const snap = await db.collection(collectionName).doc(targetUserId).get();
+      collectCandidatesFromDoc(snap);
+    }
+
+    const usersByAuthUidSnap = await db.collection('users').where('authUid', '==', targetUserId).limit(1).get();
+    usersByAuthUidSnap.forEach((item: any) => collectCandidatesFromDoc(item));
+
+    for (const candidateEmail of uniqueNonEmptyStrings(emailCandidates)) {
+      const collectionsByEmail: Array<'users' | 'patients' | 'dentists' | 'attendants'> = ['users', 'patients', 'dentists', 'attendants'];
+      for (const collectionName of collectionsByEmail) {
+        const snapByEmail = await db.collection(collectionName).where('email', '==', candidateEmail).limit(2).get();
+        snapByEmail.forEach((item: any) => collectCandidatesFromDoc(item));
+      }
+    }
+
+    for (const candidateEmail of uniqueNonEmptyStrings(emailCandidates)) {
       try {
-        const byEmail = await admin.auth().getUserByEmail(targetEmail);
+        const byEmail = await admin.auth().getUserByEmail(candidateEmail);
         if (byEmail?.uid) authUidCandidates.push(byEmail.uid);
       } catch (e: any) {
         if (e?.code !== 'auth/user-not-found') throw e;
@@ -642,7 +673,26 @@ app.post('/api/admin/users/:id/password', requireAuth, async (req: any, res: any
     }
 
     if (!updatedAuthUid) {
-      return res.status(404).json({ error: 'Usuário de autenticação não encontrado para atualização de senha.' });
+      const createEmail = uniqueNonEmptyStrings(emailCandidates)[0];
+      if (!createEmail) {
+        return res.status(404).json({ error: 'Usuário de autenticação não encontrado para atualização de senha.' });
+      }
+
+      try {
+        const created = await admin.auth().createUser({
+          email: createEmail,
+          password: newPassword,
+        });
+        updatedAuthUid = created.uid;
+      } catch (createErr: any) {
+        if (createErr?.code === 'auth/email-already-exists') {
+          const existing = await admin.auth().getUserByEmail(createEmail);
+          await admin.auth().updateUser(existing.uid, { password: newPassword });
+          updatedAuthUid = existing.uid;
+        } else {
+          throw createErr;
+        }
+      }
     }
 
     await targetUserRef.set({

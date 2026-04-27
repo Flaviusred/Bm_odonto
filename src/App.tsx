@@ -549,7 +549,7 @@ export default function App() {
     }
   };
 
-  const syncAuthPassword = async (userId: string, newPassword: string, email?: string) => {
+  const syncAuthPassword = async (userId: string, newPassword: string, email?: string, previousEmail?: string) => {
     const trimmedPassword = String(newPassword || '').trim();
     if (!trimmedPassword) return;
 
@@ -565,7 +565,11 @@ export default function App() {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${idToken}`,
       },
-      body: JSON.stringify({ newPassword: trimmedPassword, email: email || '' }),
+      body: JSON.stringify({
+        newPassword: trimmedPassword,
+        email: email || '',
+        previousEmail: previousEmail || '',
+      }),
     });
 
     if (!response.ok) {
@@ -586,7 +590,8 @@ export default function App() {
     try {
       await runWithLoading(async () => {
         if ((updated as any).password) {
-          await syncAuthPassword(updated.id, String((updated as any).password), updated.email);
+          const existingUser = users.find((u) => u.id === updated.id);
+          await syncAuthPassword(updated.id, String((updated as any).password), updated.email, existingUser?.email);
         }
 
         const userRef = doc(db, 'users', updated.id);
@@ -1061,7 +1066,8 @@ export default function App() {
   const updateDentist = async (updated: Dentist) => {
     try {
       if ((updated as any).password) {
-        await syncAuthPassword(updated.id, String((updated as any).password), updated.email);
+        const existingDentist = dentists.find((d) => d.id === updated.id);
+        await syncAuthPassword(updated.id, String((updated as any).password), updated.email, existingDentist?.email);
       }
 
       const safeUpdated = stripPassword(updated as any);
@@ -1136,7 +1142,8 @@ export default function App() {
   const updateAttendant = async (updated: Attendant) => {
     try {
       if ((updated as any).password) {
-        await syncAuthPassword(updated.id, String((updated as any).password), updated.email);
+        const existingAttendant = attendants.find((a) => a.id === updated.id);
+        await syncAuthPassword(updated.id, String((updated as any).password), updated.email, existingAttendant?.email);
       }
 
       const safeUpdated = stripPassword(updated as any);
