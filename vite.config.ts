@@ -5,8 +5,7 @@ import {defineConfig, loadEnv} from 'vite';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
-  return {
-    plugins: [react(), tailwindcss()],
+  return {    base: mode === 'production' ? '/bravoOdonto/' : '/',    plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

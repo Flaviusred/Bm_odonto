@@ -771,7 +771,16 @@ app.get("/api/cbmpb/:identifier", async (req, res) => {
   console.log(`Token detectado (Tamanho: ${token.length}): ${token.substring(0, 10)}...${token.substring(token.length - 10)}`);
 
   try {
-    const url = `https://bravo.bombeiros.pb.gov.br/api/v1/pbsaude/servidor/${identifier}`;
+    // CBMPB_BASE_URL deve ser configurado como variável de ambiente com a URL base da API interna
+    // Ex: CBMPB_BASE_URL=https://api-interna.cbmpb.pb.gov.br
+    // NUNCA deve apontar para o mesmo domínio do app (causaria loop infinito).
+    const cbmpbBase = (process.env.CBMPB_BASE_URL || '').replace(/\/$/, '');
+    if (!cbmpbBase) {
+      console.error("CBMPB_BASE_URL não configurado");
+      return res.status(500).json({ error: "URL da API CBMPB não configurada no servidor. Defina CBMPB_BASE_URL." });
+    }
+    const appOrigin = (process.env.APP_ORIGIN || '').replace(/\/$/, '') || `http://localhost:${PORT}`;
+    const url = `${cbmpbBase}/api/v1/pbsaude/servidor/${identifier}`;
     console.log(`Buscando em: ${url}`);
     
     const response = await fetch(url, {
@@ -783,8 +792,8 @@ app.get("/api/cbmpb/:identifier", async (req, res) => {
         'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
         'Cache-Control': 'no-cache',
         'Pragma': 'no-cache',
-        'Referer': 'https://bravo.bombeiros.pb.gov.br/',
-        'Origin': 'https://bravo.bombeiros.pb.gov.br'
+        'Referer': `${appOrigin}/`,
+        'Origin': appOrigin
       }
     });
     
