@@ -15,8 +15,7 @@ Observações:
 - Modo seguro (dry-run) apenas lista as alterações planejadas. Use `--apply` para executar as mudanças.
 */
 
-const admin = require('firebase-admin');
-const process = require('process');
+import admin from 'firebase-admin';
 
 const APPLY = process.argv.includes('--apply');
 
