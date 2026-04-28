@@ -1630,10 +1630,11 @@ export default function App() {
 
     try {
       await runWithLoading(async () => {
+        const currentAppUrl = `${window.location.origin}${window.location.pathname}`;
         const response = await fetch(`${API_BASE}/api/forgot-password`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, cpf, origin: window.location.origin }),
+          body: JSON.stringify({ email, cpf, origin: window.location.origin, resetLink: currentAppUrl }),
         });
 
         if (!response.ok) {

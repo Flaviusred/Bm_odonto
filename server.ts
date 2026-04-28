@@ -757,7 +757,40 @@ app.post('/api/forgot-password', async (req, res) => {
 
     const token = randomUUID();
     const expiresAt = Date.now() + 60 * 60 * 1000;
-    const link = String(resetLink || `${String(origin || process.env.APP_ORIGIN || `http://localhost:${PORT}`).trim()}/?resetToken=${token}&uid=${targetUser.id}`);
+
+    // Resolve a front-end base URL preserving deployment subpaths (e.g. /bravoOdonto/).
+    const appBasePath = String(process.env.APP_BASE_PATH || '/').trim();
+    const normalizedAppBasePath = appBasePath.startsWith('/') ? appBasePath : `/${appBasePath}`;
+    const bodyOrigin = String(origin || '').trim();
+    const refererHeader = String(req.headers?.referer || '').trim();
+    const fallbackOrigin = String(process.env.APP_ORIGIN || `http://localhost:${PORT}`).trim();
+
+    const baseUrl = (() => {
+      if (resetLink) return String(resetLink).trim();
+
+      const normalizeBase = (raw: string) => {
+        if (!raw) return '';
+        try {
+          const parsed = new URL(raw);
+          const path = (parsed.pathname || '/').replace(/\/+$/, '/');
+          const hasSubPath = path !== '/';
+          const resolvedPath = hasSubPath ? path : normalizedAppBasePath.replace(/\/+$/, '/') || '/';
+          return `${parsed.origin}${resolvedPath}`;
+        } catch {
+          return '';
+        }
+      };
+
+      return (
+        normalizeBase(refererHeader)
+        || normalizeBase(bodyOrigin)
+        || normalizeBase(fallbackOrigin)
+        || `http://localhost:${PORT}/`
+      );
+    })();
+
+    const separator = baseUrl.includes('?') ? '&' : '?';
+    const link = `${baseUrl.replace(/\/+$/, '')}${separator}resetToken=${encodeURIComponent(token)}&uid=${encodeURIComponent(targetUser.id)}`;
 
     await db.collection('users').doc(targetUser.id).set({
       authUid: targetUser.authUid,
