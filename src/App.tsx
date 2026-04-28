@@ -126,7 +126,6 @@ export default function App() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [treatments, setTreatments] = useState<Treatment[]>([]);
   const [documents, setDocuments] = useState<PatientDocument[]>([]);
-  const [patientLinkedIds, setPatientLinkedIds] = useState<string[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [schedules, setSchedules] = useState<DentistSchedule[]>([]);
@@ -342,10 +341,8 @@ export default function App() {
     if (isPatient) {
       // Pacientes: consultas pelo authUid e por email para cobrir registros legados.
       const normalizedEmail = (user.email || '').trim().toLowerCase();
-      const normalizedCpf = String((user as any).cpf || '').replace(/\D/g, '');
       const appointmentQueries: Array<{ key: string; filters: import('firebase/firestore').QueryConstraint[] }> = [
         { key: 'byAuthUid', filters: [where('patientAuthUid', '==', firebaseAuthUid)] },
-        { key: 'byUserId', filters: [where('patientId', '==', user.id)] },
       ];
       if (normalizedEmail) {
         appointmentQueries.push({ key: 'byEmail', filters: [where('patientEmail', '==', normalizedEmail)] });
@@ -353,31 +350,14 @@ export default function App() {
       subscribeUnion('appointments', setAppointments, appointmentQueries);
       subscribeUnion('treatments', setTreatments, [
         { key: 'byAuthUid', filters: [where('patientAuthUid', '==', firebaseAuthUid)] },
-        { key: 'byUserId', filters: [where('patientId', '==', user.id)] },
       ]);
       subscribeUnion('documents', setDocuments, [
         { key: 'byAuthUid', filters: [where('patientAuthUid', '==', firebaseAuthUid)] },
-        { key: 'byUserId', filters: [where('patientId', '==', user.id)] },
       ]);
       subscribeUnion('patients', setPatients, [
         { key: 'byAuthUid', filters: [where('authUid', '==', firebaseAuthUid)] },
-        { key: 'byDependentOfUserId', filters: [where('dependentOf', '==', user.id)] },
-        ...(normalizedCpf ? [{ key: 'byCpf', filters: [where('cpf', '==', normalizedCpf)] }] : []),
         ...(normalizedEmail ? [{ key: 'byEmail', filters: [where('email', '==', normalizedEmail)] }] : []),
       ]);
-
-      // Fallback para bases legadas: documento em patients com ID do usuário.
-      const unsubPatientDoc = onSnapshot(doc(db, 'patients', user.id), (snap) => {
-        if (!snap.exists()) return;
-        const row = { ...(snap.data() as any), id: snap.id };
-        setPatients((prev: any[]) => {
-          const map = new Map<string, any>();
-          prev.forEach((p: any) => map.set(p.id, p));
-          map.set(row.id, { ...map.get(row.id), ...row });
-          return Array.from(map.values());
-        });
-      }, () => {});
-      unsubscribes.push(unsubPatientDoc);
 
       subscribeAll('announcements', setAnnouncements);
       subscribeAll('users', setUsers);
@@ -413,62 +393,7 @@ export default function App() {
     return () => {
       unsubscribes.forEach(unsub => unsub());
     };
-  }, [db, firebaseAuthReady, firebaseAuthUid, user?.id, user?.email, (user as any)?.cpf]);
-
-  useEffect(() => {
-    if (!user || user.role !== 'patient') return;
-    const linked = new Set<string>();
-    if (user.id) linked.add(user.id);
-    patients.forEach((p: any) => {
-      if (p?.id) linked.add(p.id);
-    });
-    setPatientLinkedIds(Array.from(linked));
-  }, [user?.id, user?.role, patients]);
-
-  useEffect(() => {
-    if (!firebaseAuthReady || !firebaseAuthUid || !user || user.role !== 'patient') return;
-
-    const ids = patientLinkedIds.filter(Boolean);
-    if (ids.length === 0) return;
-
-    const unsubscribes: (() => void)[] = [];
-
-    const subscribeUnionByIds = (
-      name: string,
-      setter: (data: any[]) => void,
-      authUidField: 'patientAuthUid'
-    ) => {
-      const bucket = new Map<string, any[]>();
-      const flush = () => {
-        const merged = new Map<string, any>();
-        for (const rows of bucket.values()) {
-          rows.forEach((row) => merged.set(row.id, row));
-        }
-        setter(Array.from(merged.values()));
-      };
-
-      const qAuth = query(collection(db, name), where(authUidField, '==', firebaseAuthUid));
-      unsubscribes.push(onSnapshot(qAuth, (snap) => {
-        bucket.set('byAuthUid', snap.docs.map(d => ({ ...d.data(), id: d.id } as any)));
-        flush();
-      }, () => {}));
-
-      ids.forEach((id) => {
-        const qId = query(collection(db, name), where('patientId', '==', id));
-        unsubscribes.push(onSnapshot(qId, (snap) => {
-          bucket.set(`byPatientId:${id}`, snap.docs.map(d => ({ ...d.data(), id: d.id } as any)));
-          flush();
-        }, () => {}));
-      });
-    };
-
-    subscribeUnionByIds('treatments', setTreatments, 'patientAuthUid');
-    subscribeUnionByIds('documents', setDocuments, 'patientAuthUid');
-
-    return () => {
-      unsubscribes.forEach((u) => u());
-    };
-  }, [db, firebaseAuthReady, firebaseAuthUid, user?.id, user?.role, patientLinkedIds]);
+  }, [db, firebaseAuthReady, firebaseAuthUid, user?.id, user?.email]);
 
   const updateReminderSettings = async (newSettings: typeof reminderSettings) => {
     try {
