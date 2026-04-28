@@ -1806,12 +1806,13 @@ export default function App() {
 
   const isPatient = user.role === 'patient';
   const isDentist = user.role === 'dentist';
+  const normalizedUserEmail = String(user.email || '').trim().toLowerCase();
   const patientData = isPatient
     ? (
       patients.find((p: any) =>
         p.id === user.id
-        || ((p as any).authUid && (p as any).authUid === user.id)
-        || ((p as any).email && user.email && String((p as any).email).toLowerCase() === String(user.email).toLowerCase())
+        || ((p as any).authUid && firebaseAuthUid && (p as any).authUid === firebaseAuthUid)
+        || ((p as any).email && normalizedUserEmail !== '' && String((p as any).email || '').trim().toLowerCase() === normalizedUserEmail)
       )
       || {
         id: user.id,
@@ -1824,7 +1825,7 @@ export default function App() {
         createdAt: (user as any).createdAt || new Date().toISOString(),
         isActive: true,
         patientType: 'civil' as const,
-        authUid: user.id,
+        authUid: firebaseAuthUid || user.id,
       }
     )
     : null;
