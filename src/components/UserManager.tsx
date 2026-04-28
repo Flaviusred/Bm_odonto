@@ -22,6 +22,7 @@ const availablePermissions = [
   { id: 'dentist-schedules', label: 'Gestão de Agenda' },
   { id: 'treatments', label: 'Tratamentos' },
   { id: 'dentists', label: 'Dentistas' },
+  { id: 'attendants', label: 'Atendentes' },
   { id: 'inventory', label: 'Estoque' },
   { id: 'announcements', label: 'Avisos' },
   { id: 'audit', label: 'Histórico' },
@@ -105,7 +106,7 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
         <div className="space-y-4 w-full">
           <div>
             <h1 className="text-2xl font-bold text-zinc-900">Gestão de Usuários e Permissões</h1>
-            <p className="text-zinc-500">Gerencie as permissões dos usuários cadastrados.</p>
+            <p className="text-zinc-500">Permissões extras são somadas ao acesso padrão de cada função.</p>
           </div>
           <div className="flex flex-col sm:flex-row gap-3 w-full">
             <div className="relative flex-1">

@@ -16,6 +16,7 @@ import {
   ChevronUp
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { getEffectivePermissions } from '../lib/permissions';
 import { Button } from './Button';
 import { useState, useRef, useEffect } from 'react';
 import { User } from '../types';
@@ -72,15 +73,22 @@ export function Sidebar({ activeTab, onTabChange, onLogout, user }: SidebarProps
     { id: 'dentist-treatments', label: 'Meus Atendimentos', icon: Stethoscope },
   ];
 
+  const roleBaseItems = user?.role === 'patient'
+    ? patientItems
+    : user?.role === 'dentist'
+      ? dentistItems
+      : [];
+
+  const effectivePermissions = getEffectivePermissions(user);
+  const extraItems = [...adminItems, ...settingsSubItems];
   const menuItems = user?.role === 'admin'
     ? adminItems
-    : user?.role === 'attendant'
-      ? adminItems.filter(item => (user?.permissions || []).includes(item.id))
-      : user?.role === 'patient' 
-        ? patientItems 
-        : user?.role === 'dentist' 
-          ? dentistItems 
-          : adminItems;
+    : [
+        ...roleBaseItems,
+        ...extraItems.filter(
+          (item) => effectivePermissions.includes(item.id) && !roleBaseItems.some((baseItem) => baseItem.id === item.id)
+        ),
+      ];
 
   // Agrupamento visual para o menu do admin
   const groupedAdmin = [

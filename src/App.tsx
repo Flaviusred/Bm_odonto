@@ -27,6 +27,7 @@ import { Modal } from './components/Modal';
 import { Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
 import { emailService } from './services/emailService';
 import { API_BASE, safeRandomUUID } from './lib/utils';
+import { canAccessTab, getDefaultTabForUser, isDentistTab, isPatientTab } from './lib/permissions';
 import LoadingOverlay from './components/LoadingOverlay';
 import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
 import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField, orderBy, getDocs, writeBatch } from 'firebase/firestore';
@@ -113,9 +114,7 @@ export default function App() {
     const saved = sessionStorage.getItem('odonto_user');
     if (saved) {
       const u = JSON.parse(saved);
-      if (u.role === 'patient') return 'patient-profile';
-      if (u.role === 'dentist') return 'dentist-appointments';
-      return 'dashboard';
+      return getDefaultTabForUser(u);
     }
     return 'dashboard';
   });
@@ -424,6 +423,15 @@ export default function App() {
     else sessionStorage.removeItem('odonto_user');
   }, [user]);
 
+  useEffect(() => {
+    if (!user) return;
+    if (canAccessTab(user, activeTab)) return;
+    const fallbackTab = getDefaultTabForUser(user);
+    if (fallbackTab !== activeTab) {
+      setActiveTab(fallbackTab);
+    }
+  }, [activeTab, user]);
+
   const addUser = async (data: Omit<User, 'id'>) => {
     const email = data.email.trim().toLowerCase();
     const password = (data as any).password as string | undefined;
@@ -571,6 +579,9 @@ export default function App() {
   const updateUserPermissions = async (id: string, role: UserRole, permissions: string[]) => {
     try {
       await updateDoc(doc(db, 'users', id), { role, permissions });
+      if (user?.id === id) {
+        setUser({ ...user, role, permissions });
+      }
       logAction('Edição', 'system', id, `Permissões do usuário atualizadas.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `users/${id}`);
@@ -799,7 +810,7 @@ export default function App() {
         setUser(appUser);
         setSessionExpired(false);
         sessionStorage.setItem('odonto_user', JSON.stringify(appUser));
-        setActiveTab(appUser.role === 'patient' ? 'patient-profile' : appUser.role === 'dentist' ? 'dentist-appointments' : 'dashboard');
+        setActiveTab(getDefaultTabForUser(appUser));
         logAction('Login', 'system', appUser.id, `Usuário ${appUser.name} entrou no sistema.`);
       });
     } catch (error) {
@@ -1731,6 +1742,8 @@ export default function App() {
 
   const isPatient = user.role === 'patient';
   const isDentist = user.role === 'dentist';
+  const shouldRenderPatientPortal = isPatient && isPatientTab(activeTab);
+  const shouldRenderDentistPortal = isDentist && isDentistTab(activeTab);
   const normalizedUserEmail = String(user.email || '').trim().toLowerCase();
   const patientData = isPatient
     ? (
@@ -1821,7 +1834,7 @@ export default function App() {
       <main className="flex-1 lg:pl-0 pt-16 lg:pt-0">
         <AnnouncementBanner announcements={announcements} userRole={user.role} />
         <div className="max-w-7xl mx-auto">
-          {isPatient && patientData ? (
+          {shouldRenderPatientPortal && patientData ? (
             <PatientPortal 
               activeTab={activeTab}
               patient={patientData}
@@ -1883,7 +1896,7 @@ export default function App() {
                 }
               }}
             />
-          ) : isDentist ? (
+          ) : shouldRenderDentistPortal ? (
             <DentistPortal 
               activeTab={activeTab}
               onTabChange={setActiveTab}
