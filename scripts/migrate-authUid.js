@@ -40,6 +40,10 @@ async function main() {
   }
 
   const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || firebaseClientConfig.projectId || '';
+  const FIREBASE_DATABASE_ID = process.env.FIREBASE_DATABASE_ID || (() => {
+    const id = (firebaseClientConfig.firestoreDatabaseId || '').trim();
+    return (id && id !== '(default)') ? id : '';
+  })();
   const baseConfig = {};
   if (FIREBASE_PROJECT_ID) baseConfig.projectId = FIREBASE_PROJECT_ID;
 
@@ -57,6 +61,10 @@ async function main() {
   }
 
   const db = admin.firestore();
+  if (FIREBASE_DATABASE_ID) {
+    db.settings({ databaseId: FIREBASE_DATABASE_ID });
+    console.log('Firestore usando database ID:', FIREBASE_DATABASE_ID);
+  }
 
   // Load all users docs from Firestore
   const usersSnap = await db.collection('users').get();
