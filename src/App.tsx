@@ -342,6 +342,7 @@ export default function App() {
     if (isPatient) {
       // Pacientes: consultas pelo authUid e por email para cobrir registros legados.
       const normalizedEmail = (user.email || '').trim().toLowerCase();
+      const normalizedCpf = String((user as any).cpf || '').replace(/\D/g, '');
       const appointmentQueries: Array<{ key: string; filters: import('firebase/firestore').QueryConstraint[] }> = [
         { key: 'byAuthUid', filters: [where('patientAuthUid', '==', firebaseAuthUid)] },
         { key: 'byUserId', filters: [where('patientId', '==', user.id)] },
@@ -361,8 +362,23 @@ export default function App() {
       subscribeUnion('patients', setPatients, [
         { key: 'byAuthUid', filters: [where('authUid', '==', firebaseAuthUid)] },
         { key: 'byDependentOfUserId', filters: [where('dependentOf', '==', user.id)] },
+        ...(normalizedCpf ? [{ key: 'byCpf', filters: [where('cpf', '==', normalizedCpf)] }] : []),
         ...(normalizedEmail ? [{ key: 'byEmail', filters: [where('email', '==', normalizedEmail)] }] : []),
       ]);
+
+      // Fallback para bases legadas: documento em patients com ID do usuário.
+      const unsubPatientDoc = onSnapshot(doc(db, 'patients', user.id), (snap) => {
+        if (!snap.exists()) return;
+        const row = { ...(snap.data() as any), id: snap.id };
+        setPatients((prev: any[]) => {
+          const map = new Map<string, any>();
+          prev.forEach((p: any) => map.set(p.id, p));
+          map.set(row.id, { ...map.get(row.id), ...row });
+          return Array.from(map.values());
+        });
+      }, () => {});
+      unsubscribes.push(unsubPatientDoc);
+
       subscribeAll('announcements', setAnnouncements);
       subscribeAll('users', setUsers);
     } else {
@@ -397,7 +413,7 @@ export default function App() {
     return () => {
       unsubscribes.forEach(unsub => unsub());
     };
-  }, [db, firebaseAuthReady, firebaseAuthUid, user?.id]);
+  }, [db, firebaseAuthReady, firebaseAuthUid, user?.id, user?.email, (user as any)?.cpf]);
 
   useEffect(() => {
     if (!user || user.role !== 'patient') return;
@@ -406,11 +422,8 @@ export default function App() {
     patients.forEach((p: any) => {
       if (p?.id) linked.add(p.id);
     });
-    appointments.forEach((a: any) => {
-      if (a?.patientId) linked.add(a.patientId);
-    });
     setPatientLinkedIds(Array.from(linked));
-  }, [user?.id, user?.role, patients, appointments]);
+  }, [user?.id, user?.role, patients]);
 
   useEffect(() => {
     if (!firebaseAuthReady || !firebaseAuthUid || !user || user.role !== 'patient') return;
@@ -449,7 +462,6 @@ export default function App() {
       });
     };
 
-    subscribeUnionByIds('appointments', setAppointments, 'patientAuthUid');
     subscribeUnionByIds('treatments', setTreatments, 'patientAuthUid');
     subscribeUnionByIds('documents', setDocuments, 'patientAuthUid');
 
