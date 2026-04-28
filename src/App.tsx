@@ -344,6 +344,7 @@ export default function App() {
       const normalizedEmail = (user.email || '').trim().toLowerCase();
       const appointmentQueries: Array<{ key: string; filters: import('firebase/firestore').QueryConstraint[] }> = [
         { key: 'byAuthUid', filters: [where('patientAuthUid', '==', firebaseAuthUid)] },
+        { key: 'byUserId', filters: [where('patientId', '==', user.id)] },
       ];
       if (normalizedEmail) {
         appointmentQueries.push({ key: 'byEmail', filters: [where('patientEmail', '==', normalizedEmail)] });
@@ -359,6 +360,7 @@ export default function App() {
       ]);
       subscribeUnion('patients', setPatients, [
         { key: 'byAuthUid', filters: [where('authUid', '==', firebaseAuthUid)] },
+        { key: 'byDependentOfUserId', filters: [where('dependentOf', '==', user.id)] },
         ...(normalizedEmail ? [{ key: 'byEmail', filters: [where('email', '==', normalizedEmail)] }] : []),
       ]);
       subscribeAll('announcements', setAnnouncements);
@@ -447,6 +449,7 @@ export default function App() {
       });
     };
 
+    subscribeUnionByIds('appointments', setAppointments, 'patientAuthUid');
     subscribeUnionByIds('treatments', setTreatments, 'patientAuthUid');
     subscribeUnionByIds('documents', setDocuments, 'patientAuthUid');
 
