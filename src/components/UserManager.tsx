@@ -3,13 +3,13 @@ import { Card, CardContent, CardHeader, CardTitle } from './Card';
 import { Button } from './Button';
 import { Input } from './Input';
 import { User, UserRole } from '../types';
-import { UserPlus, Shield, Trash2, Award, Search, Filter } from 'lucide-react';
+import { UserPlus, Shield, Trash2, Award, Search, Filter, CheckCircle } from 'lucide-react';
 import { cn, maskPhone } from '../lib/utils';
 import { Modal } from './Modal';
 
 interface UserManagerProps {
   users: User[];
-  onAddUser: (user: Omit<User, 'id'>) => void;
+  onAddUser: (user: Omit<User, 'id'>) => Promise<void> | void;
   onDeleteUser: (id: string) => void;
   onUpdateUser: (user: User) => void;
   onUpdateUserPermissions: (id: string, role: UserRole, permissions: string[]) => void;
@@ -39,6 +39,8 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
   const [confirmAction, setConfirmAction] = useState<{ type: 'password', user: User } | null>(null);
   const [generatedPassword, setGeneratedPassword] = useState<{ password: string, email: string } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [successInfo, setSuccessInfo] = useState<{ name: string; role: string } | null>(null);
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setNewUser({...newUser, phone: maskPhone(e.target.value)});
@@ -61,11 +63,21 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleAddUser = () => {
-    if (validate()) {
-      onAddUser({ ...newUser, permissions: [] });
+  const handleAddUser = async () => {
+    if (!validate()) return;
+    setIsSubmitting(true);
+    const userName = newUser.name.trim();
+    const userRole = newUser.role;
+    try {
+      await Promise.resolve(onAddUser({ ...newUser, permissions: [] }));
       setNewUser({ name: '', email: '', password: '', role: 'attendant', phone: '' });
+      setErrors({});
       setIsAddModalOpen(false);
+      setSuccessInfo({ name: userName, role: userRole });
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Falha ao criar usuario.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -204,12 +216,20 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
         isOpen={isAddModalOpen} 
         onClose={() => setIsAddModalOpen(false)} 
         title="Adicionar Novo Usuário"
+        closeOnBackdropClick={false}
       >
-        <div className="space-y-4">
+        <form
+          className="space-y-4"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleAddUser();
+          }}
+        >
           <Input 
             label="Nome" 
             value={newUser.name} 
             onChange={e => setNewUser({...newUser, name: e.target.value})} 
+            autoComplete="name"
             error={errors.name}
           />
           <Input 
@@ -217,18 +237,21 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
             type="email"
             value={newUser.email} 
             onChange={e => setNewUser({...newUser, email: e.target.value})} 
+            autoComplete="email"
             error={errors.email}
           />
           <Input 
             label="Telefone" 
             type="tel"
             value={newUser.phone} 
+            autoComplete="tel"
             onChange={handlePhoneChange}
           />
           <Input 
             label="Senha" 
             type="password"
             value={newUser.password} 
+            autoComplete="new-password"
             onChange={e => setNewUser({...newUser, password: e.target.value})} 
             error={errors.password}
           />
@@ -243,8 +266,18 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
               <option value="admin">Administrador</option>
             </select>
           </div>
-          <Button onClick={handleAddUser} className="w-full">Adicionar Usuário</Button>
-        </div>
+          <Button type="submit" className="w-full" disabled={isSubmitting}>
+            {isSubmitting ? (
+              <span className="flex items-center justify-center gap-2">
+                <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" style={{ opacity: 0.25 }} />
+                  <path fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" style={{ opacity: 0.75 }} />
+                </svg>
+                Criando...
+              </span>
+            ) : 'Adicionar Usuário'}
+          </Button>
+        </form>
       </Modal>
 
       <Modal 
@@ -258,6 +291,25 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
             <Button variant="outline" onClick={() => setConfirmAction(null)}>Cancelar</Button>
             <Button onClick={executeAction}>Confirmar</Button>
           </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={!!successInfo}
+        onClose={() => setSuccessInfo(null)}
+        title="Usuário Criado"
+      >
+        <div className="space-y-4">
+          <div className="flex flex-col items-center gap-3 py-2">
+            <CheckCircle className="h-12 w-12 text-emerald-500" />
+            <p className="text-center text-zinc-700">
+              O usuário <span className="font-semibold text-zinc-900">{successInfo?.name}</span> foi criado com sucesso como{' '}
+              <span className="font-semibold text-zinc-900">
+                {successInfo?.role === 'admin' ? 'Administrador' : successInfo?.role === 'attendant' ? 'Atendente' : successInfo?.role === 'dentist' ? 'Dentista' : 'Paciente'}
+              </span>.
+            </p>
+          </div>
+          <Button className="w-full" onClick={() => setSuccessInfo(null)}>Fechar</Button>
         </div>
       </Modal>
 

@@ -15,6 +15,11 @@ import { google } from "googleapis";
 
 dotenv.config();
 
+const localEnvPath = path.join(process.cwd(), '.env.local');
+if (fs.existsSync(localEnvPath)) {
+  dotenv.config({ path: localEnvPath, override: true });
+}
+
 // Lê configurações do Firebase client config para reutilizar projectId e databaseId no Admin SDK
 let firebaseClientConfig: any = {};
 try {
@@ -104,20 +109,25 @@ const requireAuth = async (req: any, res: any, next: any) => {
 const getRoleForFirebaseUid = async (firebaseUid: string): Promise<string | null> => {
   if (!db || typeof db.collection !== 'function') return null;
 
-  const directSnap = await db.collection('users').doc(firebaseUid).get();
-  if (directSnap.exists) {
-    const data = directSnap.data() || {};
-    return String((data as any).role || '').trim() || null;
-  }
+  try {
+    const directSnap = await db.collection('users').doc(firebaseUid).get();
+    if (directSnap.exists) {
+      const data = directSnap.data() || {};
+      return String((data as any).role || '').trim() || null;
+    }
 
-  const byAuthUidSnap = await db.collection('users').where('authUid', '==', firebaseUid).limit(1).get();
-  if (!byAuthUidSnap.empty) {
-    const doc = byAuthUidSnap.docs[0];
-    const data = doc.data() || {};
-    return String((data as any).role || '').trim() || null;
-  }
+    const byAuthUidSnap = await db.collection('users').where('authUid', '==', firebaseUid).limit(1).get();
+    if (!byAuthUidSnap.empty) {
+      const doc = byAuthUidSnap.docs[0];
+      const data = doc.data() || {};
+      return String((data as any).role || '').trim() || null;
+    }
 
-  return null;
+    return null;
+  } catch (err) {
+    console.warn('getRoleForFirebaseUid warning:', err instanceof Error ? err.message : String(err));
+    return null;
+  }
 };
 
 // Simple file-based debug logger for email flows (helps capture logs when
@@ -710,6 +720,157 @@ app.post('/api/admin/users/:id/password', requireAuth, async (req: any, res: any
   } catch (err) {
     console.error('/api/admin/users/:id/password error:', err);
     return res.status(500).json({ error: 'Falha ao atualizar senha no Auth.', details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/admin/auth/create-user', requireAuth, async (req: any, res: any) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const password = String(req.body?.password || '');
+  const requesterUid = String(req.firebaseUser?.uid || '').trim();
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'email e password são obrigatórios' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'A senha deve ter pelo menos 6 caracteres.' });
+  }
+
+  try {
+    const requesterRole = await getRoleForFirebaseUid(requesterUid);
+    if (!requesterRole) {
+      return res.status(503).json({ error: 'AUTH_BACKEND_UNAVAILABLE', details: 'Nao foi possivel validar permissao admin no ambiente atual.' });
+    }
+    if (requesterRole !== 'admin') {
+      return res.status(403).json({ error: 'Apenas administradores podem criar usuários.' });
+    }
+
+    try {
+      const existing = await admin.auth().getUserByEmail(email);
+      return res.status(409).json({ error: 'Ja existe uma conta de autenticacao com este e-mail.', code: 'auth/email-already-exists', uid: existing.uid });
+    } catch (existingErr: any) {
+      if (existingErr?.code !== 'auth/user-not-found') throw existingErr;
+    }
+
+    const created = await admin.auth().createUser({ email, password });
+    return res.json({ status: 'ok', uid: created.uid });
+  } catch (err) {
+    console.error('/api/admin/auth/create-user error:', err);
+    return res.status(500).json({ error: 'Falha ao criar usuário no Auth.', details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/admin/users/create', requireAuth, async (req: any, res: any) => {
+  const requesterUid = String(req.firebaseUser?.uid || '').trim();
+  const requesterEmail = String(req.firebaseUser?.email || '').trim().toLowerCase();
+  const bootstrapAdminEmail = String(process.env.BOOTSTRAP_ADMIN_EMAIL || 'admin@odonto.com').trim().toLowerCase();
+
+  const name = String(req.body?.name || '').trim();
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const phone = String(req.body?.phone || '').trim();
+  const password = String(req.body?.password || '');
+  const role = String(req.body?.role || '').trim();
+  const permissions = Array.isArray(req.body?.permissions) ? req.body.permissions.filter((p: any) => typeof p === 'string') : [];
+  const specialty = String(req.body?.specialty || '').trim();
+  const cro = String(req.body?.cro || '').trim();
+
+  if (!db || typeof db.collection !== 'function') {
+    return res.status(503).json({ error: 'Firestore indisponível no servidor.' });
+  }
+  if (!name || !email || !password || !role) {
+    return res.status(400).json({ error: 'name, email, password e role são obrigatórios.' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'A senha deve ter pelo menos 6 caracteres.' });
+  }
+  if (!['admin', 'attendant', 'dentist'].includes(role)) {
+    return res.status(400).json({ error: 'role inválido para criação administrativa.' });
+  }
+
+  try {
+    const requesterRole = await getRoleForFirebaseUid(requesterUid);
+    const canManageUsers = requesterRole === 'admin' || requesterRole === 'attendant' || (!!bootstrapAdminEmail && requesterEmail === bootstrapAdminEmail);
+    if (!canManageUsers) {
+      return res.status(403).json({ error: 'Sem permissão para criar usuários.' });
+    }
+
+    let authUid = '';
+    let usedLegacyAuthFallback = false;
+    const isAuthBackendUnavailable = (err: any) => {
+      const code = String(err?.code || '');
+      const msg = String(err?.message || '').toLowerCase();
+      return (
+        code === 'app/invalid-credential'
+        || code === 'app/no-app'
+        || msg.includes('could not load the default credentials')
+        || msg.includes('default firebase app does not exist')
+      );
+    };
+    try {
+      const created = await admin.auth().createUser({
+        email,
+        password,
+        displayName: name,
+      });
+      authUid = created.uid;
+    } catch (authErr: any) {
+      if (authErr?.code === 'auth/email-already-exists') {
+        const existing = await admin.auth().getUserByEmail(email);
+        authUid = existing.uid;
+        await admin.auth().updateUser(existing.uid, { password, displayName: name }).catch(() => {});
+      } else if (isAuthBackendUnavailable(authErr)) {
+        usedLegacyAuthFallback = true;
+        authUid = randomUUID().replace(/-/g, '').substring(0, 28);
+      } else {
+        throw authErr;
+      }
+    }
+
+    const userDoc: any = {
+      id: authUid,
+      name,
+      email,
+      role,
+      permissions,
+      phone,
+      ...(usedLegacyAuthFallback ? { legacyAuth: true, password } : { authUid }),
+    };
+    await db.collection('users').doc(authUid).set(userDoc, { merge: true });
+
+    let attendantDoc: any = null;
+    let dentistDoc: any = null;
+
+    if (role === 'attendant') {
+      attendantDoc = {
+        id: authUid,
+        name,
+        email,
+        phone,
+        createdAt: new Date().toISOString(),
+        isActive: true,
+        ...(usedLegacyAuthFallback ? { legacyAuth: true, password } : { authUid }),
+      };
+      await db.collection('attendants').doc(authUid).set(attendantDoc, { merge: true });
+    }
+
+    if (role === 'dentist') {
+      dentistDoc = {
+        id: authUid,
+        name,
+        email,
+        phone,
+        specialty: specialty || 'Geral',
+        cro: cro || '00000',
+        createdAt: new Date().toISOString(),
+        isActive: true,
+        ...(usedLegacyAuthFallback ? { legacyAuth: true, password } : { authUid }),
+      };
+      await db.collection('dentists').doc(authUid).set(dentistDoc, { merge: true });
+    }
+
+    return res.json({ status: 'ok', legacyAuth: usedLegacyAuthFallback, user: userDoc, attendant: attendantDoc, dentist: dentistDoc });
+  } catch (err) {
+    console.error('/api/admin/users/create error:', err);
+    return res.status(500).json({ error: 'Falha ao criar usuário administrativo.', details: err instanceof Error ? err.message : String(err) });
   }
 });
 

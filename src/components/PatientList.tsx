@@ -164,7 +164,7 @@ function PatientListContent({
     city: '',
     state: '',
     patientType: 'civil' as PatientType,
-    securityType: undefined as any,
+    securityType: '',
     registrationNumber: '',
     functionalCategory: '',
     dependentOf: '',
@@ -253,7 +253,7 @@ function PatientListContent({
       city: '',
       state: '',
       patientType: 'civil',
-      securityType: undefined,
+      securityType: '',
       registrationNumber: '',
       functionalCategory: '',
       dependentOf: '',
@@ -280,7 +280,7 @@ function PatientListContent({
       city: patient.city || '',
       state: patient.state || '',
       patientType: patient.patientType,
-      securityType: patient.securityType,
+      securityType: patient.securityType || '',
       registrationNumber: patient.registrationNumber || '',
       functionalCategory: patient.functionalCategory || '',
       dependentOf: patient.dependentOf || '',
@@ -502,7 +502,7 @@ function PatientListContent({
                     "w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500",
                     errors.securityType && "border-red-500 focus:ring-red-500"
                   )}
-                  value={formData.securityType}
+                  value={formData.securityType || ''}
                   onChange={(e) => setFormData({ ...formData, securityType: e.target.value as any })}
                 >
                   <option value="">Selecione...</option>

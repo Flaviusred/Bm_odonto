@@ -38,6 +38,23 @@ service cloud.firestore {
       return role == 'attendant' || role == 'admin' || isBootstrapAdmin();
     }
 
+    function hasUsersPermission() {
+      return isSignedIn() && (
+        isBootstrapAdmin()
+        || (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid))
+          && (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'attendant'
+            || (
+              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.permissions is list
+              && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.permissions.hasAny(['users'])
+            )
+          )
+        )
+      );
+    }
+
     function isNotificationTypeAllowed(type) {
       return type == 'success' || type == 'info' || type == 'error' || type == 'warning';
     }
@@ -79,8 +96,12 @@ service cloud.firestore {
 
     // --- Users ---
     match /users/{userId} {
-      // Criação: somente quando o UID de autenticação corresponde (signup/migração)
-      allow create: if isSignedIn() && (request.auth.uid == userId || request.auth.uid == request.resource.data.authUid);
+      // Criação: o próprio usuário (bootstrap/migração) ou quem tem permissão de gestão de usuários.
+      allow create: if isSignedIn() && (
+        request.auth.uid == userId
+        || request.auth.uid == request.resource.data.authUid
+        || hasUsersPermission()
+      );
 
       // Leitura de documento único: o próprio usuário, por authUid, por email, ou staff
       allow get: if isSignedIn() && (
@@ -98,11 +119,11 @@ service cloud.firestore {
       allow update: if isSignedIn() && (
         request.auth.uid == userId
         || resource.data.authUid == request.auth.uid
-        || isStaff()
+        || hasUsersPermission()
       );
 
-      // Exclusão permitida para administradores
-      allow delete: if isSignedIn() && isAdmin();
+      // Exclusão permitida para gestão de usuários
+      allow delete: if isSignedIn() && hasUsersPermission();
     }
 
     // --- Patients (prontuários) ---
@@ -129,7 +150,7 @@ service cloud.firestore {
 
     // --- Attendants ---
     match /attendants/{attendantId} {
-      allow create, read, update, delete: if isSignedIn() && isAdmin();
+      allow create, read, update, delete: if isSignedIn() && hasUsersPermission();
     }
 
     // --- Appointments ---

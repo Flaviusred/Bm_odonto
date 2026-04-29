@@ -45,10 +45,11 @@ enum OperationType {
 
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const message = error instanceof Error ? error.message : String(error);
-  // Erros de permissão são esperados para usuários sem acesso à coleção — apenas loga, não crasha.
+  // Em leituras/listagens, erro de permissão pode ser esperado para alguns perfis.
+  // Em escritas, precisamos tratar como erro real para não mascarar falhas de cadastro.
   const isPermissionError = message.includes('Missing or insufficient permissions') ||
     (error as any)?.code === 'permission-denied';
-  if (isPermissionError) {
+  if (isPermissionError && (operationType === OperationType.LIST || operationType === OperationType.GET)) {
     console.warn(`Firestore [${operationType}] at ${path}: sem permissão (ignorado para este perfil).`);
     return;
   }
@@ -409,6 +410,20 @@ export default function App() {
     return safe;
   };
 
+  const stripUndefinedDeep = (value: any): any => {
+    if (Array.isArray(value)) {
+      return value.map(stripUndefinedDeep);
+    }
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => [k, stripUndefinedDeep(v)])
+      );
+    }
+    return value;
+  };
+
   const clearLegacyPasswords = async (id: string) => {
     // updateDoc evita criar documentos vazios quando o doc não existe.
     await updateDoc(doc(db, 'users', id), { password: deleteField() }).catch(() => {});
@@ -432,55 +447,279 @@ export default function App() {
     }
   }, [activeTab, user]);
 
+  const createAuthUserFromAdmin = async (email: string, password: string) => {
+    try {
+      if ((import.meta as any).env?.DEV) {
+        throw new Error('AUTH_BACKEND_UNAVAILABLE');
+      }
+
+      const currentAuthUser = auth.currentUser;
+      if (!currentAuthUser) {
+        throw new Error('Sessao expirada. Faca login novamente para criar usuarios.');
+      }
+
+      const idToken = await currentAuthUser.getIdToken();
+      const response = await fetch(`${API_BASE}/api/admin/auth/create-user`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (response.ok) {
+        return String(payload.uid || '').trim();
+      }
+
+      // Conta ja existe no Firebase Auth: reaproveita UID para criar docs no Firestore.
+      if (response.status === 409 && payload?.uid) {
+        return String(payload.uid).trim();
+      }
+
+      // Em dev/local, o Admin SDK pode não ter credencial para Auth.
+      // Nesses casos, sinaliza indisponibilidade para usar fallback legado no Firestore.
+      if (response.status === 404 || response.status >= 500) {
+        throw new Error('AUTH_BACKEND_UNAVAILABLE');
+      }
+
+      if (response.status === 503 && String(payload?.error || '').includes('AUTH_BACKEND_UNAVAILABLE')) {
+        throw new Error('AUTH_BACKEND_UNAVAILABLE');
+      }
+
+      throw new Error(payload.error || 'Falha ao criar usuario no Firebase Auth.');
+    } catch (err: any) {
+      // Falhas de rede/local API indisponível: usa fallback legado no Firestore.
+      const msg = String(err?.message || '');
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
+        throw new Error('AUTH_BACKEND_UNAVAILABLE');
+      }
+      if (String(err?.code || '') === 'auth/email-already-in-use' || msg.includes('email-already-in-use')) {
+        throw new Error('Este e-mail ja possui conta no Firebase Auth. Use outro e-mail ou recupere a senha da conta existente.');
+      }
+      throw err;
+    }
+  };
+
+  const ensureCurrentAdminRoleDoc = async () => {
+    const current = auth.currentUser;
+    if (!current) {
+      throw new Error('Sessao sem autenticacao Firebase. Faca logout e login novamente para criar usuarios.');
+    }
+
+    const canonicalRef = doc(db, 'users', current.uid);
+    const canonicalSnap = await getDoc(canonicalRef).catch(() => null as any);
+    const canonicalData = canonicalSnap && canonicalSnap.exists() ? (canonicalSnap.data() as any) : null;
+    const currentRole = String(canonicalData?.role || user?.role || '').trim();
+
+    if (currentRole && (currentRole === 'admin' || currentRole === 'attendant')) {
+      return;
+    }
+
+    const fallbackRole = (user?.role === 'admin' || user?.role === 'attendant') ? user.role : 'admin';
+    await setDoc(canonicalRef, {
+      authUid: current.uid,
+      email: (current.email || user?.email || '').toLowerCase(),
+      name: user?.name || current.displayName || 'Administrador',
+      role: fallbackRole,
+      permissions: user?.permissions || [],
+    }, { merge: true });
+  };
+
+  const createManagedUserFromServer = async (payload: {
+    name: string;
+    email: string;
+    phone?: string;
+    password: string;
+    role: UserRole;
+    permissions: string[];
+  }) => {
+    const currentAuthUser = auth.currentUser;
+    if (!currentAuthUser) {
+      throw new Error('Sessao sem autenticacao Firebase. Faca logout e login novamente para criar usuarios.');
+    }
+
+    const idToken = await currentAuthUser.getIdToken();
+    const response = await fetch(`${API_BASE}/api/admin/users/create`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${idToken}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const details = String(data.details || '').trim();
+      throw new Error(details ? `${data.error || 'Falha ao criar usuário no servidor.'} (${details})` : (data.error || 'Falha ao criar usuário no servidor.'));
+    }
+
+    return data;
+  };
+
+  const shouldUseClientUserFallback = (error: unknown) => {
+    const raw = error instanceof Error ? error.message : String(error || '');
+    const message = raw.toLowerCase();
+    return (
+      message.includes('auth_backend_unavailable') ||
+      message.includes('could not load the default credentials') ||
+      message.includes('default credentials')
+    );
+  };
+
+  const createManagedUserLocally = async (payload: {
+    name: string;
+    email: string;
+    phone?: string;
+    password: string;
+    role: UserRole;
+    permissions: string[];
+  }) => {
+    let authUid = '';
+    let legacyAuth = false;
+
+    try {
+      authUid = await createAuthUserWithSecondaryApp(payload.email, payload.password);
+    } catch (err: any) {
+      // Qualquer falha no Firebase Auth client-side (reCAPTCHA, credenciais, email existente, etc.)
+      // resulta em modo legado: usuário criado apenas no Firestore, sem conta Auth.
+      console.warn('createAuthUserWithSecondaryApp falhou, usando modo legado:', err?.code || err?.message);
+      legacyAuth = true;
+    }
+
+    const generatedId = authUid || `legacy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const userDoc: any = stripUndefinedDeep({
+      id: generatedId,
+      name: payload.name,
+      email: payload.email,
+      phone: payload.phone || '',
+      role: payload.role,
+      permissions: payload.permissions || [],
+      createdAt: new Date().toISOString(),
+      isActive: true,
+      authUid: authUid || undefined,
+      legacyAuth: !authUid || undefined,
+      password: !authUid ? payload.password : undefined,
+    });
+
+    await runWithLoading(async () => {
+      await setDoc(doc(db, 'users', generatedId), userDoc, { merge: true });
+
+      if (payload.role === 'attendant') {
+        await setDoc(doc(db, 'attendants', generatedId), stripUndefinedDeep({
+          id: generatedId,
+          name: payload.name,
+          email: payload.email,
+          phone: payload.phone || '',
+          createdAt: new Date().toISOString(),
+          isActive: true,
+          authUid: authUid || undefined,
+          legacyAuth: legacyAuth || undefined,
+          password: !authUid ? payload.password : undefined,
+        }), { merge: true });
+      }
+
+      if (payload.role === 'dentist') {
+        await setDoc(doc(db, 'dentists', generatedId), stripUndefinedDeep({
+          id: generatedId,
+          name: payload.name,
+          email: payload.email,
+          phone: payload.phone || '',
+          createdAt: new Date().toISOString(),
+          isActive: true,
+          authUid: authUid || undefined,
+          legacyAuth: legacyAuth || undefined,
+          password: !authUid ? payload.password : undefined,
+        }), { merge: true });
+      }
+    });
+
+    return {
+      user: {
+        id: generatedId,
+      },
+    };
+  };
+
   const addUser = async (data: Omit<User, 'id'>) => {
     const email = data.email.trim().toLowerCase();
     const password = (data as any).password as string | undefined;
+
+    if (!auth.currentUser) {
+      throw new Error('Sessao sem autenticacao Firebase. Faca logout e login novamente para criar usuarios.');
+    }
+
+    const existingUserByEmail = users.find((u) => String(u.email || '').trim().toLowerCase() === email);
+    if (existingUserByEmail) {
+      throw new Error(
+        `Ja existe um usuario com este e-mail (${existingUserByEmail.name} - ${existingUserByEmail.role}). ` +
+        'Altere o e-mail ou edite o usuario existente.'
+      );
+    }
 
     if (!password || password.length < 6) {
       throw new Error('Senha deve ter pelo menos 6 caracteres para criar conta no Firebase Auth.');
     }
 
-    const authUid = await createAuthUserWithSecondaryApp(email, password);
-    const id = authUid;
-    const newUser: User & { authUid?: string } = {
-      ...(stripPassword(data as any) as Omit<User, 'id'>),
-      id,
+    await ensureCurrentAdminRoleDoc();
+
+    const payload = {
+      name: data.name,
       email,
-      authUid,
+      phone: data.phone,
+      password,
+      role: data.role,
+      permissions: (data as any).permissions || [],
     };
+
+    let serverPayload: any;
+    try {
+      serverPayload = await createManagedUserFromServer(payload);
+    } catch (error) {
+      if (!shouldUseClientUserFallback(error)) {
+        throw error;
+      }
+      serverPayload = await createManagedUserLocally(payload);
+    }
+
+    const newUser: User = {
+      ...(stripPassword(data as any) as Omit<User, 'id'>),
+      id: String(serverPayload?.user?.id || ''),
+      email,
+      role: data.role,
+      permissions: (data as any).permissions || [],
+      phone: data.phone || '',
+    };
+    if (!newUser.id) {
+      throw new Error('Servidor nao retornou id do usuario criado.');
+    }
     
     try {
-      await runWithLoading(async () => {
-        await setDoc(doc(db, 'users', id), newUser);
+      await runWithLoading(async () => Promise.resolve());
 
-        if (newUser.role === 'attendant') {
-          const newAttendant: Attendant = {
-            id: newUser.id,
-            name: newUser.name,
-            email: newUser.email,
-            phone: newUser.phone || '',
-            createdAt: new Date().toISOString(),
-            isActive: true,
-          };
-          await setDoc(doc(db, 'attendants', id), newAttendant);
-        } else if (newUser.role === 'dentist') {
-          const newDentist: Dentist = {
-            id: newUser.id,
-            name: newUser.name,
-            email: newUser.email,
-            phone: newUser.phone || '',
-            specialty: (data as any).specialty || 'Geral',
-            cro: (data as any).cro || '00000',
-            createdAt: new Date().toISOString(),
-            isActive: true,
-          };
-          await setDoc(doc(db, 'dentists', id), newDentist);
-        }
-      });
+      setUsers((prev) => normalizeUsersCollection([...(prev as any[]), newUser as any]));
+      if (newUser.role === 'attendant') {
+        const attendantLocal: Attendant = {
+          id: newUser.id,
+          name: newUser.name,
+          email: newUser.email,
+          phone: newUser.phone || '',
+          createdAt: new Date().toISOString(),
+          isActive: true,
+        };
+        setAttendants((prev) => {
+          if (prev.some((a) => a.id === attendantLocal.id)) return prev;
+          return [...prev, attendantLocal];
+        });
+      }
 
       logAction('Criação', 'system', newUser.id, `Usuário ${newUser.name} criado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'users');
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(message || 'Falha ao criar usuário no Firestore.');
     }
   };
 
@@ -702,6 +941,9 @@ export default function App() {
           if (!legacyUser) {
             throw authErr;
           }
+          if (legacyUser.role === 'admin' || legacyUser.role === 'attendant') {
+            throw new Error('Login administrativo requer autenticacao Firebase. Verifique Email/Senha no Firebase Auth.');
+          }
           legacySessionUser = legacyUser;
 
           // Se Email/Senha estiver desabilitado no Firebase Auth, mantém acesso legado
@@ -815,7 +1057,8 @@ export default function App() {
       });
     } catch (error) {
       console.error('Login error:', error);
-      setLoginError('Credenciais incorretas.');
+      const message = error instanceof Error ? error.message : '';
+      setLoginError(message || 'Credenciais incorretas.');
     }
   };
 
@@ -885,7 +1128,7 @@ export default function App() {
         createdPatientName = newPatient.name;
 
         // include authUid on patient document when available
-        const patientWithAuth: any = { ...newPatient, ...(authUid ? { authUid } : {}) };
+        const patientWithAuth: any = stripUndefinedDeep({ ...newPatient, ...(authUid ? { authUid } : {}) });
         await setDoc(doc(db, 'patients', effectiveId), patientWithAuth);
 
         // Only create a corresponding `users` document for titulars (not for dependents)
@@ -937,7 +1180,7 @@ export default function App() {
   const updatePatient = async (updated: Patient) => {
     try {
       await runWithLoading(async () => {
-        const safePatient = stripPassword(updated as any);
+        const safePatient = stripUndefinedDeep(stripPassword(updated as any));
         await setDoc(doc(db, 'patients', updated.id), safePatient, { merge: true });
         await setDoc(doc(db, 'patients', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
 
