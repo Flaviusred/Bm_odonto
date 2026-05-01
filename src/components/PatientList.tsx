@@ -1,6 +1,6 @@
 import { useState, Component } from 'react';
 import React from 'react';
-import { Plus, Search, MoreVertical, Edit2, Trash2, Phone, Mail, Calendar, History, ChevronDown, ChevronUp, Stethoscope, UserRound, Award, Users, CornerDownRight, ArrowLeft } from 'lucide-react';
+import { Plus, Search, MoreVertical, Edit2, Trash2, Phone, Mail, Calendar, History, ChevronDown, ChevronUp, Stethoscope, UserRound, Award, Users, CornerDownRight, ArrowLeft, CheckCircle, AlertTriangle } from 'lucide-react';
 import { Button } from './Button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './Card';
 import { Input } from './Input';
@@ -72,6 +72,8 @@ function PatientListContent({
   const [isConfirmImportOpen, setIsConfirmImportOpen] = useState(false);
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+  const [errorModal, setErrorModal] = useState<string | null>(null);
+  const [warningModal, setWarningModal] = useState<string | null>(null);
   const [viewingDependentsOf, setViewingDependentsOf] = useState<Patient | null>(null);
 
   const handleBackFromPatients = () => {
@@ -115,7 +117,7 @@ function PatientListContent({
         }
         if (depPromises.length > 0) await Promise.all(depPromises);
       } catch (err) {
-        alert('Erro ao salvar pacientes importados: ' + (err instanceof Error ? err.message : String(err)));
+        setErrorModal('Erro ao salvar pacientes importados: ' + (err instanceof Error ? err.message : String(err)));
         setIsSearching(false);
         setIsConfirmImportOpen(false);
         return;
@@ -134,7 +136,7 @@ function PatientListContent({
       if (!titular.address) incompleteFields.push('Endereço');
       
       if (incompleteFields.length > 0) {
-        alert(`Dados importados com sucesso, mas os seguintes campos estão incompletos: ${incompleteFields.join(', ')}. Por favor, complete o cadastro.`);
+        setWarningModal(`Dados importados com sucesso, mas os seguintes campos estão incompletos: ${incompleteFields.join(', ')}. Por favor, complete o cadastro.`);
       } else {
         setSuccessMessage('Dados importados com sucesso!');
         setIsSuccessModalOpen(true);
@@ -142,7 +144,7 @@ function PatientListContent({
       setIsModalOpen(false);
       setCbmpbIdentifier('');
     } catch (error) {
-      alert('Erro ao buscar dados do militar.');
+      setErrorModal('Erro ao buscar dados do militar. Verifique o número e tente novamente.');
     } finally {
       setIsSearching(false);
       setIsConfirmImportOpen(false);
@@ -214,7 +216,7 @@ function PatientListContent({
     const isDuplicate = patients.some(p => p.cpf.replace(/\D/g, '') === cleanCpf && p.id !== editingPatient?.id);
     
     if (isDuplicate) {
-      alert('Este CPF já possui cadastro.');
+      setErrorModal('Este CPF já possui cadastro.');
       return;
     }
 
@@ -426,7 +428,7 @@ function PatientListContent({
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="flex gap-2 p-4 bg-emerald-50 rounded-xl border border-emerald-100">
             <Input 
-              label="Buscar Militar (Matrícula/CPF)" 
+              label="Buscar Militar do CBMPB (Matrícula/CPF)" 
               value={cbmpbIdentifier}
               onChange={(e) => setCbmpbIdentifier(e.target.value)}
             />
@@ -984,22 +986,44 @@ return (
       {renderModals()}
       <Modal isOpen={isConfirmImportOpen} onClose={() => setIsConfirmImportOpen(false)} title="Confirmar Importação">
         <div className="space-y-4">
-          <p>Deseja realmente importar os dados deste paciente da API?</p>
-          <div className="flex gap-2 justify-end">
-            <Button variant="outline" onClick={() => setIsConfirmImportOpen(false)}>Não</Button>
-            <Button onClick={() => {
-              handleSearchCBMPB();
-              setIsConfirmImportOpen(false);
-            }}>Sim</Button>
+          <div className="flex items-start gap-3 rounded-xl border border-blue-200 bg-blue-50 p-4">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-blue-500 mt-0.5" />
+            <p className="text-sm text-blue-800">Deseja realmente importar os dados deste militar da base do CBMPB?</p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setIsConfirmImportOpen(false)}>Cancelar</Button>
+            <Button onClick={() => { handleSearchCBMPB(); setIsConfirmImportOpen(false); }}>Importar</Button>
           </div>
         </div>
       </Modal>
+
       <Modal isOpen={isSuccessModalOpen} onClose={() => setIsSuccessModalOpen(false)} title="Sucesso">
         <div className="space-y-4">
-          <p>{successMessage}</p>
-          <div className="flex justify-end">
-            <Button onClick={() => setIsSuccessModalOpen(false)}>OK</Button>
+          <div className="flex flex-col items-center gap-3 py-2">
+            <CheckCircle className="h-12 w-12 text-emerald-500" />
+            <p className="text-center text-zinc-700">{successMessage}</p>
           </div>
+          <Button className="w-full" onClick={() => setIsSuccessModalOpen(false)}>Fechar</Button>
+        </div>
+      </Modal>
+
+      <Modal isOpen={!!errorModal} onClose={() => setErrorModal(null)} title="Erro">
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-red-500 mt-0.5" />
+            <p className="text-sm text-red-700">{errorModal}</p>
+          </div>
+          <Button className="w-full" onClick={() => setErrorModal(null)}>Fechar</Button>
+        </div>
+      </Modal>
+
+      <Modal isOpen={!!warningModal} onClose={() => setWarningModal(null)} title="Atenção">
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500 mt-0.5" />
+            <p className="text-sm text-amber-800">{warningModal}</p>
+          </div>
+          <Button className="w-full" onClick={() => setWarningModal(null)}>Entendido</Button>
         </div>
       </Modal>
     </>

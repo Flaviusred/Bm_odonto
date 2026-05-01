@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './Card';
 import { Button } from './Button';
 import { Input } from './Input';
 import { User, UserRole } from '../types';
-import { UserPlus, Shield, Trash2, Award, Search, Filter, CheckCircle } from 'lucide-react';
+import { UserPlus, Shield, Trash2, Award, Search, Filter, CheckCircle, AlertTriangle } from 'lucide-react';
 import { cn, maskPhone } from '../lib/utils';
 import { Modal } from './Modal';
 
@@ -40,7 +40,10 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
   const [generatedPassword, setGeneratedPassword] = useState<{ password: string, email: string } | null>(null);
   const [copied, setCopied] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [successInfo, setSuccessInfo] = useState<{ name: string; role: string } | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<User | null>(null);
+  const [deleteSuccess, setDeleteSuccess] = useState<string | null>(null);
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setNewUser({...newUser, phone: maskPhone(e.target.value)});
@@ -66,6 +69,7 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
   const handleAddUser = async () => {
     if (!validate()) return;
     setIsSubmitting(true);
+    setSubmitError(null);
     const userName = newUser.name.trim();
     const userRole = newUser.role;
     try {
@@ -75,7 +79,7 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
       setIsAddModalOpen(false);
       setSuccessInfo({ name: userName, role: userRole });
     } catch (error) {
-      alert(error instanceof Error ? error.message : 'Falha ao criar usuario.');
+      setSubmitError(error instanceof Error ? error.message : 'Falha ao criar usuário. Tente novamente.');
     } finally {
       setIsSubmitting(false);
     }
@@ -185,7 +189,7 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
                       <option value="attendant">Atendente</option>
                       <option value="patient">Paciente</option>
                     </select>
-                    <Button variant="ghost" size="icon" onClick={() => onDeleteUser(user.id)} className="text-red-500">
+                    <Button variant="ghost" size="icon" onClick={() => setDeleteConfirm(user)} className="text-red-500">
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
@@ -214,7 +218,7 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
 
       <Modal 
         isOpen={isAddModalOpen} 
-        onClose={() => setIsAddModalOpen(false)} 
+        onClose={() => { setIsAddModalOpen(false); setSubmitError(null); setErrors({}); }} 
         title="Adicionar Novo Usuário"
         closeOnBackdropClick={false}
       >
@@ -266,6 +270,12 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
               <option value="admin">Administrador</option>
             </select>
           </div>
+          {submitError && (
+            <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <span className="mt-0.5 shrink-0">⚠</span>
+              <span>{submitError}</span>
+            </div>
+          )}
           <Button type="submit" className="w-full" disabled={isSubmitting}>
             {isSubmitting ? (
               <span className="flex items-center justify-center gap-2">
@@ -278,6 +288,54 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
             ) : 'Adicionar Usuário'}
           </Button>
         </form>
+      </Modal>
+
+      <Modal
+        isOpen={!!deleteConfirm}
+        onClose={() => setDeleteConfirm(null)}
+        title="Excluir Usuário"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-red-500 mt-0.5" />
+            <p className="text-sm text-red-700">
+              Tem certeza que deseja excluir o usuário{' '}
+              <span className="font-semibold">{deleteConfirm?.name}</span>?{' '}
+              Esta ação não pode ser desfeita.
+            </p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setDeleteConfirm(null)}>Cancelar</Button>
+            <Button
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={() => {
+                if (!deleteConfirm) return;
+                const name = deleteConfirm.name;
+                onDeleteUser(deleteConfirm.id);
+                setDeleteConfirm(null);
+                setDeleteSuccess(name);
+              }}
+            >
+              Excluir
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={!!deleteSuccess}
+        onClose={() => setDeleteSuccess(null)}
+        title="Usuário Excluído"
+      >
+        <div className="space-y-4">
+          <div className="flex flex-col items-center gap-3 py-2">
+            <CheckCircle className="h-12 w-12 text-emerald-500" />
+            <p className="text-center text-zinc-700">
+              O usuário <span className="font-semibold text-zinc-900">{deleteSuccess}</span> foi excluído com sucesso.
+            </p>
+          </div>
+          <Button className="w-full" onClick={() => setDeleteSuccess(null)}>Fechar</Button>
+        </div>
       </Modal>
 
       <Modal 

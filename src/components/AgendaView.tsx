@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Appointment, Patient, Dentist, DentistSchedule } from '../types';
 import { Button } from './Button';
 import { Card, CardContent } from './Card';
-import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Plus, Search, UserRound, MessageCircle, CheckCircle2, XCircle, AlertCircle, Stethoscope, Clock, Calendar, ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Plus, Search, UserRound, MessageCircle, CheckCircle2, XCircle, AlertCircle, Stethoscope, Clock, Calendar, ChevronDown, ChevronUp, CheckCircle, AlertTriangle } from 'lucide-react';
 import { Modal } from './Modal';
 import { Input } from './Input';
 import { cn } from '../lib/utils';
@@ -49,6 +49,8 @@ export function AgendaView({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [completeConfirm, setCompleteConfirm] = useState<Appointment | null>(null);
+  const [aptActionSuccess, setAptActionSuccess] = useState<{ type: 'completed' | 'rescheduled'; patientName: string } | null>(null);
   const [formData, setFormData] = useState({
     patientId: '',
     dentistId: '',
@@ -104,16 +106,22 @@ export function AgendaView({
         ...editingAppointment,
         ...formData,
       });
+      const patientName = getPatientName(formData.patientId);
+      setIsModalOpen(false);
+      setEditingAppointment(null);
+      setFormData({ patientId: '', dentistId: '', date: '', time: '', notes: '' });
+      setErrors({});
+      setAptActionSuccess({ type: 'rescheduled', patientName });
     } else {
       onAddAppointment({
         ...formData,
         status: 'scheduled',
       });
+      setIsModalOpen(false);
+      setEditingAppointment(null);
+      setFormData({ patientId: '', dentistId: '', date: '', time: '', notes: '' });
+      setErrors({});
     }
-    setIsModalOpen(false);
-    setEditingAppointment(null);
-    setFormData({ patientId: '', dentistId: '', date: '', time: '', notes: '' });
-    setErrors({});
   };
 
   const statusColors = {
@@ -548,7 +556,7 @@ export function AgendaView({
                         >
                           <CheckCircle2 className="h-4 w-4 text-blue-500" />
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onUpdateStatus(apt.id, 'completed')} title="Concluir"><CheckCircle2 className="h-4 w-4 text-emerald-500" /></Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setCompleteConfirm(apt)} title="Concluir"><CheckCircle2 className="h-4 w-4 text-emerald-500" /></Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onUpdateStatus(apt.id, 'cancelled')} title="Cancelar"><XCircle className="h-4 w-4 text-red-500" /></Button>
                       </>
                     )}
@@ -737,6 +745,60 @@ export function AgendaView({
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Confirmação: Concluir agendamento */}
+      <Modal
+        isOpen={!!completeConfirm}
+        onClose={() => setCompleteConfirm(null)}
+        title="Concluir Agendamento"
+      >
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+            <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500 mt-0.5" />
+            <p className="text-sm text-emerald-800">
+              Tem certeza que deseja marcar o agendamento de{' '}
+              <span className="font-semibold">{completeConfirm ? getPatientName(completeConfirm.patientId) : ''}</span>{' '}
+              em {completeConfirm ? parseDate(completeConfirm.date).toLocaleDateString('pt-BR') : ''} às{' '}
+              {completeConfirm?.time} como concluído?
+            </p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setCompleteConfirm(null)}>Cancelar</Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              onClick={() => {
+                if (!completeConfirm) return;
+                const patientName = getPatientName(completeConfirm.patientId);
+                onUpdateStatus(completeConfirm.id, 'completed');
+                setCompleteConfirm(null);
+                setAptActionSuccess({ type: 'completed', patientName });
+              }}
+            >
+              Concluir
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Sucesso: realizado ou remarcado */}
+      <Modal
+        isOpen={!!aptActionSuccess}
+        onClose={() => setAptActionSuccess(null)}
+        title={aptActionSuccess?.type === 'completed' ? 'Agendamento Concluído' : 'Agendamento Remarcado'}
+      >
+        <div className="space-y-4">
+          <div className="flex flex-col items-center gap-3 py-2">
+            <CheckCircle className="h-12 w-12 text-emerald-500" />
+            <p className="text-center text-zinc-700">
+              {aptActionSuccess?.type === 'completed'
+                ? <>O agendamento de <span className="font-semibold text-zinc-900">{aptActionSuccess.patientName}</span> foi marcado como <span className="font-semibold text-emerald-700">concluído</span> com sucesso.</>
+                : <>O agendamento de <span className="font-semibold text-zinc-900">{aptActionSuccess?.patientName}</span> foi <span className="font-semibold text-blue-700">remarcado</span> com sucesso.</>
+              }
+            </p>
+          </div>
+          <Button className="w-full" onClick={() => setAptActionSuccess(null)}>Fechar</Button>
+        </div>
       </Modal>
     </div>
   );
