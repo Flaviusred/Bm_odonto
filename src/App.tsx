@@ -582,17 +582,19 @@ export default function App() {
     password: string;
     role: UserRole;
     permissions: string[];
-  }) => {
-    let authUid = '';
+  }, preknownAuthUid?: string) => {
+    let authUid = preknownAuthUid || '';
     let legacyAuth = false;
 
-    try {
-      authUid = await createAuthUserWithSecondaryApp(payload.email, payload.password);
-    } catch (err: any) {
-      // Qualquer falha no Firebase Auth client-side (reCAPTCHA, credenciais, email existente, etc.)
-      // resulta em modo legado: usuário criado apenas no Firestore, sem conta Auth.
-      console.warn('createAuthUserWithSecondaryApp falhou, usando modo legado:', err?.code || err?.message);
-      legacyAuth = true;
+    if (!authUid) {
+      try {
+        authUid = await createAuthUserWithSecondaryApp(payload.email, payload.password);
+      } catch (err: any) {
+        // Qualquer falha no Firebase Auth client-side (reCAPTCHA, credenciais, email existente, etc.)
+        // resulta em modo legado: usuário criado apenas no Firestore, sem conta Auth.
+        console.warn('createAuthUserWithSecondaryApp falhou, usando modo legado:', err?.code || err?.message);
+        legacyAuth = true;
+      }
     }
 
     const generatedId = authUid || `legacy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -687,7 +689,15 @@ export default function App() {
       if (!shouldUseClientUserFallback(error)) {
         throw error;
       }
-      serverPayload = await createManagedUserLocally(payload);
+      // Passo intermediário: tenta o endpoint legado /api/admin/auth/create-user (servidor de produção antigo)
+      // para criar o usuário no Firebase Auth via Admin SDK sem perder a autenticação do admin atual.
+      let preknownUid: string | undefined;
+      try {
+        preknownUid = await createAuthUserFromAdmin(payload.email, payload.password);
+      } catch (_authErr) {
+        // Endpoint também indisponível ou falhou — segue para fallback completo.
+      }
+      serverPayload = await createManagedUserLocally(payload, preknownUid);
     }
 
     const newUser: User = {
