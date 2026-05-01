@@ -550,6 +550,12 @@ export default function App() {
       body: JSON.stringify(payload),
     });
 
+    // 404 significa que o servidor em produção ainda não tem esta rota (versão antiga).
+    // Trata como indisponível para acionar o fallback local.
+    if (response.status === 404) {
+      throw new Error('AUTH_BACKEND_UNAVAILABLE');
+    }
+
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       const details = String(data.details || '').trim();
