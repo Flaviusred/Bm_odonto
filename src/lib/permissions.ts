@@ -3,6 +3,12 @@ import { User, UserRole } from '../types';
 const ROLE_BASE_PERMISSIONS: Record<UserRole, string[]> = {
   admin: [
     'dashboard',
+    'dashboard-period',
+    'dashboard-by-type',
+    'dashboard-by-dentist',
+    'dashboard-by-status',
+    'dashboard-export-sheet',
+    'dashboard-export-pdf',
     'dentists',
     'patients',
     'attendants',

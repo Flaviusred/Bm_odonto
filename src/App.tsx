@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import React from 'react';
 import { Sidebar } from './components/Sidebar';
+import * as XLSX from 'xlsx';
 import { Dashboard } from './components/Dashboard';
 import { PatientList } from './components/PatientList';
 import { AgendaView } from './components/AgendaView';
@@ -94,6 +95,60 @@ function normalizeUsersCollection(rows: any[]): User[] {
   return result as User[];
 }
 
+const LEGACY_SESSION_FALLBACK_AUTH_CODES = new Set([
+  'auth/operation-not-allowed',
+  'auth/invalid-api-key',
+  'auth/network-request-failed',
+  'auth/internal-error',
+  'auth/too-many-requests',
+  'auth/configuration-not-found',
+  'auth/recaptcha-not-enabled',
+]);
+
+const isFetchUnavailableError = (error: unknown) => {
+  const msg = String((error as any)?.message || '').toLowerCase();
+  return msg.includes('failed to fetch') || msg.includes('networkerror') || msg.includes('fetch');
+};
+
+const isEmailAlreadyInUseAuthError = (error: unknown) => {
+  const code = String((error as any)?.code || '').toLowerCase();
+  const msg = String((error as any)?.message || '').toLowerCase();
+  return code === 'auth/email-already-in-use' || msg.includes('email-already-in-use');
+};
+
+const LOGIN_AUTH_ERROR_MESSAGES: Record<string, string> = {
+  'auth/invalid-credential': 'E-mail ou senha inválidos. Verifique os dados e tente novamente.',
+  'auth/wrong-password': 'Senha incorreta. Tente novamente.',
+  'auth/user-not-found': 'Não encontramos uma conta com este e-mail.',
+  'auth/invalid-email': 'O e-mail informado é inválido.',
+  'auth/too-many-requests': 'Muitas tentativas de login. Aguarde alguns minutos e tente novamente.',
+  'auth/network-request-failed': 'Falha de conexão. Verifique sua internet e tente novamente.',
+};
+
+const extractAuthErrorCode = (error: unknown) => {
+  const explicitCode = String((error as any)?.code || '').trim().toLowerCase();
+  if (explicitCode.startsWith('auth/')) {
+    return explicitCode;
+  }
+
+  const rawMessage = String((error as any)?.message || '');
+  const match = rawMessage.match(/auth\/[a-z-]+/i);
+  return match ? match[0].toLowerCase() : '';
+};
+
+const getFriendlyLoginErrorMessage = (error: unknown) => {
+  if (error instanceof Error && !String(error.message || '').includes('Firebase: Error')) {
+    return error.message;
+  }
+
+  const code = extractAuthErrorCode(error);
+  if (code && LOGIN_AUTH_ERROR_MESSAGES[code]) {
+    return LOGIN_AUTH_ERROR_MESSAGES[code];
+  }
+
+  return 'Não foi possível autenticar agora. Verifique e-mail/senha e tente novamente.';
+};
+
 export default function App() {
   const [globalLoading, setGlobalLoading] = useState(false);
 
@@ -119,6 +174,16 @@ export default function App() {
     }
     return 'dashboard';
   });
+
+  type ExportPeriodKey = '7d' | '30d' | '90d' | 'year' | 'all';
+  const EXPORT_PERIOD_OPTIONS: Array<{ key: ExportPeriodKey; label: string }> = [
+    { key: '7d', label: '7 dias' },
+    { key: '30d', label: '30 dias' },
+    { key: '90d', label: '90 dias' },
+    { key: 'year', label: 'Este ano' },
+    { key: 'all', label: 'Todo período' },
+  ];
+  const [exportPeriod, setExportPeriod] = useState<ExportPeriodKey>('30d');
 
   const [patients, setPatients] = useState<Patient[]>([]);
   const [dentists, setDentists] = useState<Dentist[]>([]);
@@ -491,11 +556,10 @@ export default function App() {
       throw new Error(payload.error || 'Falha ao criar usuario no Firebase Auth.');
     } catch (err: any) {
       // Falhas de rede/local API indisponível: usa fallback legado no Firestore.
-      const msg = String(err?.message || '');
-      if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
+      if (isFetchUnavailableError(err)) {
         throw new Error('AUTH_BACKEND_UNAVAILABLE');
       }
-      if (String(err?.code || '') === 'auth/email-already-in-use' || msg.includes('email-already-in-use')) {
+      if (isEmailAlreadyInUseAuthError(err)) {
         throw new Error('Este e-mail ja possui conta no Firebase Auth. Use outro e-mail ou recupere a senha da conta existente.');
       }
       throw err;
@@ -924,17 +988,9 @@ export default function App() {
     return null;
   };
 
-  const canFallbackToLegacySession = (error: any) => {
-    const code = String(error?.code || '');
-    return [
-      'auth/operation-not-allowed',
-      'auth/invalid-api-key',
-      'auth/network-request-failed',
-      'auth/internal-error',
-      'auth/too-many-requests',
-      'auth/configuration-not-found',
-      'auth/recaptcha-not-enabled'
-    ].includes(code);
+  const canFallbackToLegacySession = (error: unknown) => {
+    const code = String((error as any)?.code || '');
+    return LEGACY_SESSION_FALLBACK_AUTH_CODES.has(code);
   };
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -1073,8 +1129,7 @@ export default function App() {
       });
     } catch (error) {
       console.error('Login error:', error);
-      const message = error instanceof Error ? error.message : '';
-      setLoginError(message || 'Credenciais incorretas.');
+      setLoginError(getFriendlyLoginErrorMessage(error));
     }
   };
 
@@ -2029,6 +2084,226 @@ export default function App() {
   const patientAppointments = isPatient ? appointments.filter(a => a.patientId === user.id) : [];
   const patientTreatments = isPatient ? treatments.filter(t => t.patientId === user.id) : [];
 
+  const getDashboardExportData = (period: 'ExportPeriodKey' | '7d' | '30d' | '90d' | 'year' | 'all' = 'all') => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const today = new Date();
+
+    // Calcula data de início do período
+    let periodStart: Date | null = null;
+    if (period !== 'all') {
+      if (period === 'year') {
+        periodStart = new Date(today.getFullYear(), 0, 1);
+      } else {
+        const dayMap: Record<string, number> = { '7d': 7, '30d': 30, '90d': 90 };
+        periodStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+        periodStart.setDate(periodStart.getDate() - dayMap[period] + 1);
+      }
+    }
+
+    const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+
+    const filteredAppointments = periodStart
+      ? appointments.filter((a) => {
+          const d = parseDate(a.date);
+          return d >= periodStart! && d <= endOfToday;
+        })
+      : appointments;
+
+    const attendedStatuses = new Set(['concluído', 'completed']);
+    const patientTypeLabels: Record<string, string> = {
+      cbmpb: 'CBMPB',
+      security: 'Segurança Pública',
+      civil: 'Civil',
+    };
+
+    const totalPatients = patients.length;
+    const appointmentsTodayCount = appointments.filter((a) => a.date === todayStr).length;
+    const treatmentsDone = treatments.length;
+    const activeDentists = dentists.length;
+
+    const statusCounts = filteredAppointments.reduce((acc, apt) => {
+      const status = String(apt.status || 'Desconhecido');
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const dentistCounts = filteredAppointments.reduce((acc, apt) => {
+      const dentistName = dentists.find((d) => d.id === apt.dentistId)?.name || 'Desconhecido';
+      acc[dentistName] = (acc[dentistName] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const patientTypeById = new Map(patients.map((p) => [p.id, p.patientType]));
+    const attendedByType = { cbmpb: 0, security: 0, civil: 0 };
+
+    filteredAppointments.forEach((apt) => {
+      const normalizedStatus = String(apt.status || '').toLowerCase();
+      if (!attendedStatuses.has(normalizedStatus)) return;
+      const patientType = patientTypeById.get(apt.patientId);
+      if (patientType && patientType in attendedByType) {
+        attendedByType[patientType as keyof typeof attendedByType] += 1;
+      }
+    });
+
+    const periodLabel = period === 'all' ? 'Todo período'
+      : period === 'year' ? 'Este ano'
+      : period === '7d' ? 'Últimos 7 dias'
+      : period === '30d' ? 'Últimos 30 dias'
+      : 'Últimos 90 dias';
+
+    return {
+      generatedAt: new Date(),
+      periodLabel,
+      totals: {
+        totalPatients,
+        appointmentsTodayCount,
+        treatmentsDone,
+        activeDentists,
+      },
+      statusCounts,
+      dentistCounts,
+      attendedByType: [
+        { type: patientTypeLabels.cbmpb, total: attendedByType.cbmpb },
+        { type: patientTypeLabels.security, total: attendedByType.security },
+        { type: patientTypeLabels.civil, total: attendedByType.civil },
+      ],
+    };
+  };
+
+  const downloadDashboardSpreadsheet = () => {
+    const data = getDashboardExportData(exportPeriod);
+    const stamp = data.generatedAt.toISOString().slice(0, 10);
+
+    const wb = XLSX.utils.book_new();
+
+    // Aba: Resumo Geral
+    const resumoWs = XLSX.utils.aoa_to_sheet([
+      ['Relatório', 'Dashboard'],
+      ['Período', data.periodLabel],
+      ['Gerado em', data.generatedAt.toLocaleString('pt-BR')],
+      [],
+      ['Indicador', 'Valor'],
+      ['Total Pacientes (geral)', data.totals.totalPatients],
+      ['Agendamentos Hoje', data.totals.appointmentsTodayCount],
+      ['Tratamentos Realizados (geral)', data.totals.treatmentsDone],
+      ['Dentistas Ativos', data.totals.activeDentists],
+    ]);
+    XLSX.utils.book_append_sheet(wb, resumoWs, 'Resumo Geral');
+
+    // Aba: Atendimentos por Tipo
+    const tipoRows: (string | number)[][] = [['Tipo de Usuário', 'Atendimentos Concluídos']];
+    data.attendedByType.forEach((entry) => tipoRows.push([entry.type, entry.total]));
+    const tipoWs = XLSX.utils.aoa_to_sheet(tipoRows);
+    XLSX.utils.book_append_sheet(wb, tipoWs, 'Por Tipo de Usuário');
+
+    // Aba: Agendamentos por Status
+    const statusRows: (string | number)[][] = [['Status', 'Quantidade']];
+    Object.entries(data.statusCounts).forEach(([s, c]) => statusRows.push([s, c]));
+    const statusWs = XLSX.utils.aoa_to_sheet(statusRows);
+    XLSX.utils.book_append_sheet(wb, statusWs, 'Por Status');
+
+    // Aba: Agendamentos por Dentista
+    const dentistRows: (string | number)[][] = [['Dentista', 'Agendamentos']];
+    Object.entries(data.dentistCounts).forEach(([d, c]) => dentistRows.push([d, c]));
+    const dentistWs = XLSX.utils.aoa_to_sheet(dentistRows);
+    XLSX.utils.book_append_sheet(wb, dentistWs, 'Por Dentista');
+
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `dashboard-relatorio-${stamp}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  };
+
+  const downloadDashboardPdf = () => {
+    const data = getDashboardExportData(exportPeriod);
+    const escapeHtml = (value: string | number) => String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+    const statusRows = Object.entries(data.statusCounts)
+      .map(([status, count]) => `<tr><td>${escapeHtml(status)}</td><td>${escapeHtml(count)}</td></tr>`)
+      .join('');
+    const dentistRows = Object.entries(data.dentistCounts)
+      .map(([dentist, count]) => `<tr><td>${escapeHtml(dentist)}</td><td>${escapeHtml(count)}</td></tr>`)
+      .join('');
+    const typeRows = data.attendedByType
+      .map((entry) => `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.total)}</td></tr>`)
+      .join('');
+
+    const popup = window.open('', '_blank', 'width=1000,height=720');
+    if (!popup) {
+      window.alert('Não foi possível abrir a janela de impressão. Desative o bloqueador de pop-up e tente novamente.');
+      return;
+    }
+
+    popup.document.write(`
+      <!DOCTYPE html>
+      <html lang="pt-BR">
+      <head>
+        <meta charset="UTF-8" />
+        <title>Relatório do Dashboard</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 24px; color: #111827; }
+          h1, h2 { margin: 0 0 12px; }
+          h1 { font-size: 22px; }
+          h2 { margin-top: 24px; font-size: 16px; }
+          p { margin: 0 0 8px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+          th, td { border: 1px solid #d1d5db; padding: 8px; text-align: left; font-size: 13px; }
+          th { background: #f3f4f6; }
+          .meta { color: #6b7280; font-size: 12px; margin-bottom: 12px; }
+          .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+          .box { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; }
+          .value { font-size: 20px; font-weight: bold; }
+        </style>
+      </head>
+      <body>
+        <h1>Relatório do Dashboard</h1>
+        <p class="meta">Período: ${escapeHtml(data.periodLabel)}</p>
+        <p class="meta">Gerado em: ${escapeHtml(data.generatedAt.toLocaleString('pt-BR'))}</p>
+
+        <h2>Resumo Geral</h2>
+        <div class="grid">
+          <div class="box"><div>Total Pacientes</div><div class="value">${escapeHtml(data.totals.totalPatients)}</div></div>
+          <div class="box"><div>Agendamentos Hoje</div><div class="value">${escapeHtml(data.totals.appointmentsTodayCount)}</div></div>
+          <div class="box"><div>Tratamentos Realizados</div><div class="value">${escapeHtml(data.totals.treatmentsDone)}</div></div>
+          <div class="box"><div>Dentistas Ativos</div><div class="value">${escapeHtml(data.totals.activeDentists)}</div></div>
+        </div>
+
+        <h2>Atendimentos por Tipo de Usuário</h2>
+        <table>
+          <thead><tr><th>Tipo</th><th>Quantidade</th></tr></thead>
+          <tbody>${typeRows}</tbody>
+        </table>
+
+        <h2>Agendamentos por Status</h2>
+        <table>
+          <thead><tr><th>Status</th><th>Quantidade</th></tr></thead>
+          <tbody>${statusRows}</tbody>
+        </table>
+
+        <h2>Agendamentos por Dentista</h2>
+        <table>
+          <thead><tr><th>Dentista</th><th>Quantidade</th></tr></thead>
+          <tbody>${dentistRows}</tbody>
+        </table>
+      </body>
+      </html>
+    `);
+    popup.document.close();
+    popup.focus();
+    popup.print();
+  };
+
   return (
     <div className="flex min-h-screen bg-zinc-50">
       {globalLoading && <LoadingOverlay />}
@@ -2213,7 +2488,116 @@ export default function App() {
                   appointments={appointments} 
                   treatments={treatments}
                   dentists={dentists}
+                  view="overview"
                 />
+              )}
+              {activeTab === 'dashboard-period' && (
+                <Dashboard 
+                  patients={patients} 
+                  appointments={appointments} 
+                  treatments={treatments}
+                  dentists={dentists}
+                  view="period"
+                />
+              )}
+              {activeTab === 'dashboard-by-type' && (
+                <Dashboard 
+                  patients={patients} 
+                  appointments={appointments} 
+                  treatments={treatments}
+                  dentists={dentists}
+                  view="by-type"
+                />
+              )}
+              {activeTab === 'dashboard-by-dentist' && (
+                <Dashboard 
+                  patients={patients} 
+                  appointments={appointments} 
+                  treatments={treatments}
+                  dentists={dentists}
+                  view="by-dentist"
+                />
+              )}
+              {activeTab === 'dashboard-by-status' && (
+                <Dashboard 
+                  patients={patients} 
+                  appointments={appointments} 
+                  treatments={treatments}
+                  dentists={dentists}
+                  view="by-status"
+                />
+              )}
+              {activeTab === 'dashboard-export-sheet' && (
+                <div className="p-4 lg:p-8 space-y-6">
+                  <div>
+                    <h1 className="text-2xl font-bold text-zinc-900">Exportar Dashboard para Planilha</h1>
+                    <p className="text-zinc-500">Baixe os indicadores do dashboard em formato Excel (.xlsx) com abas separadas por categoria.</p>
+                  </div>
+                  <Card className="border-none shadow-sm">
+                    <CardContent className="p-6 space-y-5">
+                      <div>
+                        <p className="text-sm font-medium text-zinc-700 mb-3">Filtrar por período:</p>
+                        <div className="flex flex-wrap gap-2">
+                          {EXPORT_PERIOD_OPTIONS.map((opt) => (
+                            <button
+                              key={opt.key}
+                              type="button"
+                              onClick={() => setExportPeriod(opt.key)}
+                              className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors border ${
+                                exportPeriod === opt.key
+                                  ? 'bg-emerald-500 text-white border-emerald-500'
+                                  : 'bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50'
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <p className="text-sm text-zinc-600">
+                        O arquivo Excel inclui 4 abas: Resumo Geral, Atendimentos por Tipo de Usuário (CBMPB, Segurança Pública e Civil),
+                        Agendamentos por Status e por Dentista — filtrados pelo período selecionado.
+                      </p>
+                      <Button onClick={downloadDashboardSpreadsheet}>Baixar planilha (.xlsx)</Button>
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
+              {activeTab === 'dashboard-export-pdf' && (
+                <div className="p-4 lg:p-8 space-y-6">
+                  <div>
+                    <h1 className="text-2xl font-bold text-zinc-900">Exportar Dashboard para PDF</h1>
+                    <p className="text-zinc-500">Gere uma versão pronta para impressão/arquivo em PDF dos indicadores do dashboard.</p>
+                  </div>
+                  <Card className="border-none shadow-sm">
+                    <CardContent className="p-6 space-y-5">
+                      <div>
+                        <p className="text-sm font-medium text-zinc-700 mb-3">Filtrar por período:</p>
+                        <div className="flex flex-wrap gap-2">
+                          {EXPORT_PERIOD_OPTIONS.map((opt) => (
+                            <button
+                              key={opt.key}
+                              type="button"
+                              onClick={() => setExportPeriod(opt.key)}
+                              className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors border ${
+                                exportPeriod === opt.key
+                                  ? 'bg-emerald-500 text-white border-emerald-500'
+                                  : 'bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50'
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <p className="text-sm text-zinc-600">
+                        Ao clicar, será aberta a visualização de impressão com todos os dados consolidados do período selecionado.
+                        Em seguida, escolha o destino PDF na janela de impressão do navegador.
+                      </p>
+                      <Button onClick={downloadDashboardPdf}>Gerar PDF</Button>
+                    </CardContent>
+                  </Card>
+                </div>
               )}
               {activeTab === 'patients' && (
                 <PatientList 

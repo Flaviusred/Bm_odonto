@@ -12,8 +12,11 @@ import {
   Settings,
   CalendarPlus,
   History,
+  FileSpreadsheet,
+  FileText,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  PieChart
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { getEffectivePermissions } from '../lib/permissions';
@@ -31,8 +34,19 @@ interface SidebarProps {
 export function Sidebar({ activeTab, onTabChange, onLogout, user }: SidebarProps) {
   const [isOpen, setIsOpen] = useState(false);
 
+  const [isDashboardOpen, setIsDashboardOpen] = useState(false);
+  const dashboardButtonRef = useRef<HTMLButtonElement | null>(null);
+
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const settingsButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    if (dashboardButtonRef.current) {
+      setTimeout(() => {
+        try { dashboardButtonRef.current?.focus(); } catch {}
+      }, 0);
+    }
+  }, [isDashboardOpen]);
 
   useEffect(() => {
     // After toggling settings, restore focus to the settings button (deferred)
@@ -43,8 +57,17 @@ export function Sidebar({ activeTab, onTabChange, onLogout, user }: SidebarProps
     }
   }, [isSettingsOpen]);
 
+  const dashboardSubItems = [
+    { id: 'dashboard', label: 'Visão Geral', icon: LayoutDashboard },
+    { id: 'dashboard-period', label: 'Atendimentos por Período', icon: Calendar },
+    { id: 'dashboard-by-type', label: 'Atend. por Tipo de Usuário', icon: Users },
+    { id: 'dashboard-by-dentist', label: 'Agendamentos por Dentista', icon: UserRound },
+    { id: 'dashboard-by-status', label: 'Agendamentos por Status', icon: PieChart },
+    { id: 'dashboard-export-sheet', label: 'Gerar Planilha (Excel)', icon: FileSpreadsheet },
+    { id: 'dashboard-export-pdf', label: 'Gerar PDF', icon: FileText },
+  ];
+
   const adminItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'dentists', label: 'Dentistas', icon: UserRound },
     { id: 'patients', label: 'Pacientes', icon: Users },
     { id: 'attendants', label: 'Atendentes', icon: UserRound },
@@ -95,7 +118,6 @@ export function Sidebar({ activeTab, onTabChange, onLogout, user }: SidebarProps
     {
       title: 'Principal',
       items: [
-        { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
         { id: 'dentists', label: 'Dentistas', icon: UserRound },
         { id: 'patients', label: 'Pacientes', icon: Users },
         { id: 'attendants', label: 'Atendentes', icon: UserRound },
@@ -163,6 +185,52 @@ export function Sidebar({ activeTab, onTabChange, onLogout, user }: SidebarProps
       <nav className="flex-1 space-y-1 overflow-y-auto pr-2 custom-scrollbar">
         {user?.role === 'admin' ? (
           <>
+            <div className="mb-4">
+              <button
+                type="button"
+                ref={dashboardButtonRef}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setIsDashboardOpen(prev => !prev);
+                  setTimeout(() => {
+                    try { dashboardButtonRef.current?.focus(); } catch {}
+                  }, 50);
+                }}
+                className="w-full flex items-center justify-between px-4 py-3 rounded-xl hover:bg-zinc-900 text-zinc-400 hover:text-zinc-200 transition-all duration-200"
+              >
+                <div className="flex items-center gap-3">
+                  <LayoutDashboard className="h-5 w-5" />
+                  <span className="text-sm">Dashboard</span>
+                </div>
+                {isDashboardOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </button>
+
+              {isDashboardOpen && (
+                <div className="pl-4 mt-1 space-y-1">
+                  {dashboardSubItems.map((subItem) => (
+                    <button
+                      type="button"
+                      key={subItem.id}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        onTabChange(subItem.id);
+                        setIsOpen(false);
+                      }}
+                      className={cn(
+                        'w-full flex items-center gap-3 px-4 py-2 rounded-xl text-sm transition-all duration-200',
+                        activeTab === subItem.id
+                          ? 'bg-emerald-500/10 text-emerald-400 font-medium'
+                          : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-900'
+                      )}
+                    >
+                      <subItem.icon className="h-4 w-4" />
+                      {subItem.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {groupedAdmin.map((group) => (
               <div key={group.title} className="mb-4">
                 <div className="px-4 text-xs font-semibold text-zinc-500 uppercase tracking-wide">{group.title}</div>
