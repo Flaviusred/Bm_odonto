@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './Card';
 import { Button } from './Button';
 import { Input } from './Input';
 import { User, UserRole } from '../types';
-import { UserPlus, Shield, Trash2, Award, Search, Filter, CheckCircle, AlertTriangle } from 'lucide-react';
+import { UserPlus, Shield, Trash2, Award, Search, Filter, CheckCircle, AlertTriangle, UserX, UserCheck } from 'lucide-react';
 import { cn, maskPhone } from '../lib/utils';
 import { Modal } from './Modal';
 
@@ -44,6 +44,7 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
   const [successInfo, setSuccessInfo] = useState<{ name: string; role: string } | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<User | null>(null);
   const [deleteSuccess, setDeleteSuccess] = useState<string | null>(null);
+  const [toggleConfirm, setToggleConfirm] = useState<User | null>(null);
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setNewUser({...newUser, phone: maskPhone(e.target.value)});
@@ -169,16 +170,41 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
               const order: Record<UserRole, number> = { 'dentist': 1, 'patient': 2, 'attendant': 3, 'admin': 4 };
               return (order[a.role] || 5) - (order[b.role] || 5);
             }).map(user => (
-              <div key={user.id} className="p-4 rounded-xl bg-zinc-50 border border-zinc-100 space-y-2">
+              <div key={user.id} className={cn('p-4 rounded-xl border space-y-2', user.isActive === false ? 'bg-zinc-100 border-zinc-200 opacity-60' : 'bg-zinc-50 border-zinc-100')}>
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
                   <div>
-                    <p className="font-semibold">{user.name}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold">{user.name}</p>
+                      {user.isActive === false && (
+                        <span className="text-xs bg-zinc-200 text-zinc-500 px-2 py-0.5 rounded-full font-medium">Inativo</span>
+                      )}
+                    </div>
                     <p className="text-sm text-zinc-500">{user.email}</p>
                   </div>
-                  <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                    <Button variant="ghost" size="icon" onClick={() => handleGeneratePassword(user)} className="text-emerald-600">
+                  <div className="flex items-center gap-1 w-full sm:w-auto justify-end">
+                    <button
+                      type="button"
+                      title="Resetar senha"
+                      onClick={() => handleGeneratePassword(user)}
+                      className="p-2 rounded-lg text-emerald-600 hover:bg-emerald-50 transition-colors"
+                    >
                       <Award className="h-4 w-4" />
-                    </Button>
+                    </button>
+                    <button
+                      type="button"
+                      title={user.isActive === false ? 'Reativar usuário' : 'Desativar usuário'}
+                      onClick={() => setToggleConfirm(user)}
+                      className={cn(
+                        'p-2 rounded-lg transition-colors',
+                        user.isActive === false
+                          ? 'text-zinc-400 hover:bg-zinc-100'
+                          : 'text-amber-500 hover:bg-amber-50'
+                      )}
+                    >
+                      {user.isActive === false
+                        ? <UserCheck className="h-4 w-4" />
+                        : <UserX className="h-4 w-4" />}
+                    </button>
                     <select
                       value={user.role}
                       onChange={(e) => onUpdateUserPermissions(user.id, e.target.value as UserRole, user.permissions)}
@@ -189,9 +215,14 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
                       <option value="attendant">Atendente</option>
                       <option value="patient">Paciente</option>
                     </select>
-                    <Button variant="ghost" size="icon" onClick={() => setDeleteConfirm(user)} className="text-red-500">
+                    <button
+                      type="button"
+                      title="Excluir usuário"
+                      onClick={() => setDeleteConfirm(user)}
+                      className="p-2 rounded-lg text-red-500 hover:bg-red-50 transition-colors"
+                    >
                       <Trash2 className="h-4 w-4" />
-                    </Button>
+                    </button>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -335,6 +366,40 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
             </p>
           </div>
           <Button className="w-full" onClick={() => setDeleteSuccess(null)}>Fechar</Button>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={!!toggleConfirm}
+        onClose={() => setToggleConfirm(null)}
+        title={toggleConfirm?.isActive === false ? 'Reativar Usuário' : 'Desativar Usuário'}
+      >
+        <div className="space-y-4">
+          <div className={`flex items-start gap-3 rounded-xl border p-4 ${toggleConfirm?.isActive === false ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'}`}>
+            {toggleConfirm?.isActive === false
+              ? <UserCheck className="h-5 w-5 shrink-0 text-emerald-500 mt-0.5" />
+              : <UserX className="h-5 w-5 shrink-0 text-amber-500 mt-0.5" />
+            }
+            <p className={`text-sm ${toggleConfirm?.isActive === false ? 'text-emerald-700' : 'text-amber-700'}`}>
+              {toggleConfirm?.isActive === false
+                ? <>Deseja reativar o usuário <span className="font-semibold">{toggleConfirm?.name}</span>? Ele voltará a ter acesso ao sistema.</>
+                : <>Deseja desativar o usuário <span className="font-semibold">{toggleConfirm?.name}</span>? Ele não poderá mais acessar o sistema.</>
+              }
+            </p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setToggleConfirm(null)}>Cancelar</Button>
+            <Button
+              className={toggleConfirm?.isActive === false ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : 'bg-amber-500 hover:bg-amber-600 text-white'}
+              onClick={() => {
+                if (!toggleConfirm) return;
+                onUpdateUser({ ...toggleConfirm, isActive: toggleConfirm.isActive !== false ? false : true });
+                setToggleConfirm(null);
+              }}
+            >
+              {toggleConfirm?.isActive === false ? 'Reativar' : 'Desativar'}
+            </Button>
+          </div>
         </div>
       </Modal>
 

@@ -10,6 +10,7 @@ export interface User {
   photoURL?: string;
   cpf?: string;
   phone?: string;
+  isActive?: boolean;
 }
 
 export type PatientType = 'cbmpb' | 'security' | 'civil';
