@@ -1879,6 +1879,15 @@ export default function App() {
     }
   };
 
+  const deleteInventoryItem = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'inventory', id));
+      logAction('Exclusão de Item', 'inventory', id, `Item de estoque ${id} excluído.`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `inventory/${id}`);
+    }
+  };
+
   const addMovement = async (movement: InventoryMovement) => {
     try {
       await setDoc(doc(db, 'movements', movement.id), movement);
@@ -2674,6 +2683,7 @@ export default function App() {
                   movements={movements}
                   user={user}
                   onUpdateInventory={updateInventory}
+                  onDeleteInventoryItem={deleteInventoryItem}
                   onAddMovement={addMovement}
                 />
               )}

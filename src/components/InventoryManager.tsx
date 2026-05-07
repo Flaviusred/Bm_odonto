@@ -12,10 +12,11 @@ interface InventoryManagerProps {
   movements: InventoryMovement[];
   user: User;
   onUpdateInventory: (items: InventoryItem[]) => void;
+  onDeleteInventoryItem: (id: string) => void;
   onAddMovement: (movement: InventoryMovement) => void;
 }
 
-export function InventoryManager({ inventory, movements, user, onUpdateInventory, onAddMovement }: InventoryManagerProps) {
+export function InventoryManager({ inventory, movements, user, onUpdateInventory, onDeleteInventoryItem, onAddMovement }: InventoryManagerProps) {
   const [activeTab, setActiveTab] = useState<'stock' | 'movements'>('stock');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
@@ -37,6 +38,10 @@ export function InventoryManager({ inventory, movements, user, onUpdateInventory
     quantity: 1,
     reason: '',
   });
+
+  const [showItemConfirm, setShowItemConfirm] = useState(false);
+  const [showMovementConfirm, setShowMovementConfirm] = useState(false);
+  const [deletingItemId, setDeletingItemId] = useState<string | null>(null);
 
   const filteredInventory = inventory.filter(item => 
     item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -64,7 +69,10 @@ export function InventoryManager({ inventory, movements, user, onUpdateInventory
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!validate()) return;
+    setShowItemConfirm(true);
+  };
 
+  const confirmItemSave = () => {
     if (editingItem) {
       const updated = inventory.map(item => 
         item.id === editingItem.id 
@@ -81,6 +89,7 @@ export function InventoryManager({ inventory, movements, user, onUpdateInventory
       onUpdateInventory([...inventory, newItem]);
     }
     setIsModalOpen(false);
+    setShowItemConfirm(false);
     setEditingItem(null);
     setFormData({ name: '', quantity: 0, minQuantity: 0, unit: '', category: '' });
     setErrors({});
@@ -94,6 +103,11 @@ export function InventoryManager({ inventory, movements, user, onUpdateInventory
       alert('Quantidade insuficiente em estoque!');
       return;
     }
+    setShowMovementConfirm(true);
+  };
+
+  const confirmMovementSave = () => {
+    if (!selectedItemForMovement) return;
 
     const newMovement: InventoryMovement = {
       id: Math.random().toString(36).substr(2, 9),
@@ -120,14 +134,20 @@ export function InventoryManager({ inventory, movements, user, onUpdateInventory
     onUpdateInventory(updatedInventory);
     onAddMovement(newMovement);
     setIsMovementModalOpen(false);
+    setShowMovementConfirm(false);
     setSelectedItemForMovement(null);
     setMovementData({ quantity: 1, reason: '' });
   };
 
   const handleDelete = (id: string) => {
-    if (confirm('Tem certeza que deseja excluir este item do estoque?')) {
-      onUpdateInventory(inventory.filter(item => item.id !== id));
+    setDeletingItemId(id);
+  };
+
+  const confirmDelete = () => {
+    if (deletingItemId) {
+      onDeleteInventoryItem(deletingItemId);
     }
+    setDeletingItemId(null);
   };
 
   const handleEdit = (item: InventoryItem) => {
@@ -527,62 +547,95 @@ export function InventoryManager({ inventory, movements, user, onUpdateInventory
         isOpen={isModalOpen} 
         onClose={() => {
           setIsModalOpen(false);
+          setShowItemConfirm(false);
           setErrors({});
           setFormData({ name: '', quantity: 0, minQuantity: 0, unit: '', category: '' });
         }} 
         title={editingItem ? "Editar Item" : "Novo Item no Estoque"}
+        closeOnBackdropClick={false}
       >
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <Input 
-            label="Nome do Item" 
-            required 
-            value={formData.name}
-            error={errors.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-          />
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input 
-              label="Categoria" 
-              required 
-              value={formData.category}
-              error={errors.category}
-              onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-            />
-            <Input 
-              label="Unidade (ex: Caixa, Seringa)" 
-              required 
-              value={formData.unit}
-              error={errors.unit}
-              onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
-            />
+        {showItemConfirm ? (
+          <div className="space-y-4">
+            <p className="text-zinc-700">
+              Tem certeza que deseja {editingItem ? 'salvar as alterações no item' : 'adicionar este item ao estoque'}?
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowItemConfirm(false)}>Cancelar</Button>
+              <Button onClick={confirmItemSave}>Confirmar</Button>
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4">
             <Input 
-              label="Quantidade Atual" 
-              type="number"
+              label="Nome do Item" 
               required 
-              value={formData.quantity}
-              error={errors.quantity}
-              onChange={(e) => setFormData({ ...formData, quantity: Number(e.target.value) })}
+              value={formData.name}
+              error={errors.name}
+              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
             />
-            <Input 
-              label="Quantidade Mínima" 
-              type="number"
-              required 
-              value={formData.minQuantity}
-              error={errors.minQuantity}
-              onChange={(e) => setFormData({ ...formData, minQuantity: Number(e.target.value) })}
-            />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input 
+                label="Categoria" 
+                required 
+                value={formData.category}
+                error={errors.category}
+                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+              />
+              <Input 
+                label="Unidade (ex: Caixa, Seringa)" 
+                required 
+                value={formData.unit}
+                error={errors.unit}
+                onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+              />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Input 
+                label="Quantidade Atual" 
+                type="number"
+                required 
+                value={formData.quantity}
+                error={errors.quantity}
+                onChange={(e) => setFormData({ ...formData, quantity: Number(e.target.value) })}
+              />
+              <Input 
+                label="Quantidade Mínima" 
+                type="number"
+                required 
+                value={formData.minQuantity}
+                error={errors.minQuantity}
+                onChange={(e) => setFormData({ ...formData, minQuantity: Number(e.target.value) })}
+              />
+            </div>
+            <div className="flex justify-end gap-3 pt-4">
+              <Button type="button" variant="outline" onClick={() => setIsModalOpen(false)}>
+                Cancelar
+              </Button>
+              <Button type="submit">
+                {editingItem ? "Salvar Alterações" : "Adicionar ao Estoque"}
+              </Button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
+      {/* Modal de confirmação de exclusão */}
+      <Modal
+        isOpen={!!deletingItemId}
+        onClose={() => setDeletingItemId(null)}
+        title="Confirmar Exclusão"
+        closeOnBackdropClick={false}
+      >
+        <div className="space-y-4">
+          <p className="text-zinc-700">
+            Tem certeza que deseja excluir o item{' '}
+            <strong>{inventory.find(i => i.id === deletingItemId)?.name}</strong> do estoque? Esta ação não pode ser desfeita.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setDeletingItemId(null)}>Cancelar</Button>
+            <Button className="bg-red-600 hover:bg-red-700" onClick={confirmDelete}>Excluir</Button>
           </div>
-          <div className="flex justify-end gap-3 pt-4">
-            <Button type="button" variant="outline" onClick={() => setIsModalOpen(false)}>
-              Cancelar
-            </Button>
-            <Button type="submit">
-              {editingItem ? "Salvar Alterações" : "Adicionar ao Estoque"}
-            </Button>
-          </div>
-        </form>
+        </div>
       </Modal>
 
       {/* Modal for Movement (Entry/Exit) */}
@@ -590,49 +643,70 @@ export function InventoryManager({ inventory, movements, user, onUpdateInventory
         isOpen={isMovementModalOpen}
         onClose={() => {
           setIsMovementModalOpen(false);
+          setShowMovementConfirm(false);
           setSelectedItemForMovement(null);
         }}
         title={movementType === 'in' ? `Entrada: ${selectedItemForMovement?.name}` : `Saída: ${selectedItemForMovement?.name}`}
+        closeOnBackdropClick={false}
       >
-        <form onSubmit={handleMovementSubmit} className="space-y-4">
-          <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-100 flex items-center justify-between">
-            <span className="text-sm text-zinc-600">Estoque Atual:</span>
-            <span className="text-sm font-bold text-zinc-900">{selectedItemForMovement?.quantity} {selectedItemForMovement?.unit}</span>
+        {showMovementConfirm ? (
+          <div className="space-y-4">
+            <p className="text-zinc-700">
+              Tem certeza que deseja registrar a {movementType === 'in' ? 'entrada' : 'saída'} de{' '}
+              <strong>{movementData.quantity} {selectedItemForMovement?.unit}</strong> de{' '}
+              <strong>{selectedItemForMovement?.name}</strong>?
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setShowMovementConfirm(false)}>Cancelar</Button>
+              <Button
+                className={cn(movementType === 'in' ? "bg-blue-600 hover:bg-blue-700" : "bg-rose-600 hover:bg-rose-700")}
+                onClick={confirmMovementSave}
+              >
+                Confirmar
+              </Button>
+            </div>
           </div>
-          
-          <Input 
-            label="Quantidade" 
-            type="number"
-            min={1}
-            required 
-            value={movementData.quantity}
-            onChange={(e) => setMovementData({ ...movementData, quantity: Number(e.target.value) })}
-          />
-          
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium text-zinc-700">Motivo / Observação</label>
-            <textarea 
-              className="w-full min-h-[100px] p-3 rounded-lg border border-zinc-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all bg-white text-zinc-900 text-sm outline-none"
-              placeholder="Ex: Reposição mensal, Uso em procedimento, etc."
-              value={movementData.reason}
-              onChange={(e) => setMovementData({ ...movementData, reason: e.target.value })}
+        ) : (
+          <form onSubmit={handleMovementSubmit} className="space-y-4">
+            <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-100 flex items-center justify-between">
+              <span className="text-sm text-zinc-600">Estoque Atual:</span>
+              <span className="text-sm font-bold text-zinc-900">{selectedItemForMovement?.quantity} {selectedItemForMovement?.unit}</span>
+            </div>
+            
+            <Input 
+              label="Quantidade" 
+              type="number"
+              min={1}
+              required 
+              value={movementData.quantity}
+              onChange={(e) => setMovementData({ ...movementData, quantity: Number(e.target.value) })}
             />
-          </div>
+            
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-zinc-700">Motivo / Observação</label>
+              <textarea 
+                className="w-full min-h-[100px] p-3 rounded-lg border border-zinc-200 focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all bg-white text-zinc-900 text-sm outline-none"
+                placeholder="Ex: Reposição mensal, Uso em procedimento, etc."
+                value={movementData.reason}
+                onChange={(e) => setMovementData({ ...movementData, reason: e.target.value })}
+              />
+            </div>
 
-          <div className="flex justify-end gap-3 pt-4">
-            <Button type="button" variant="outline" onClick={() => setIsMovementModalOpen(false)}>
-              Cancelar
-            </Button>
-            <Button 
-              type="submit" 
-              className={cn(
-                movementType === 'in' ? "bg-blue-600 hover:bg-blue-700" : "bg-rose-600 hover:bg-rose-700"
-              )}
-            >
-              Confirmar {movementType === 'in' ? 'Entrada' : 'Saída'}
-            </Button>
-          </div>
-        </form>
+            <div className="flex justify-end gap-3 pt-4">
+              <Button type="button" variant="outline" onClick={() => setIsMovementModalOpen(false)}>
+                Cancelar
+              </Button>
+              <Button 
+                type="submit" 
+                className={cn(
+                  movementType === 'in' ? "bg-blue-600 hover:bg-blue-700" : "bg-rose-600 hover:bg-rose-700"
+                )}
+              >
+                Confirmar {movementType === 'in' ? 'Entrada' : 'Saída'}
+              </Button>
+            </div>
+          </form>
+        )}
       </Modal>
     </div>
   );
