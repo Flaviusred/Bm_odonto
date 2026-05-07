@@ -766,6 +766,7 @@ app.post('/api/admin/users/create', requireAuth, async (req: any, res: any) => {
 
   const name = String(req.body?.name || '').trim();
   const email = String(req.body?.email || '').trim().toLowerCase();
+  const cpf = normalizeCpf(req.body?.cpf);
   const phone = String(req.body?.phone || '').trim();
   const password = String(req.body?.password || '');
   const role = String(req.body?.role || '').trim();
@@ -776,8 +777,11 @@ app.post('/api/admin/users/create', requireAuth, async (req: any, res: any) => {
   if (!db || typeof db.collection !== 'function') {
     return res.status(503).json({ error: 'Firestore indisponível no servidor.' });
   }
-  if (!name || !email || !password || !role) {
-    return res.status(400).json({ error: 'name, email, password e role são obrigatórios.' });
+  if (!name || !email || !password || !role || !cpf) {
+    return res.status(400).json({ error: 'name, email, cpf, password e role são obrigatórios.' });
+  }
+  if (cpf.length !== 11) {
+    return res.status(400).json({ error: 'CPF inválido. Informe os 11 dígitos.' });
   }
   if (password.length < 6) {
     return res.status(400).json({ error: 'A senha deve ter pelo menos 6 caracteres.' });
@@ -829,6 +833,7 @@ app.post('/api/admin/users/create', requireAuth, async (req: any, res: any) => {
       id: authUid,
       name,
       email,
+      cpf,
       role,
       permissions,
       phone,

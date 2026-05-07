@@ -27,7 +27,7 @@ import { Button } from './components/Button';
 import { Modal } from './components/Modal';
 import { Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
 import { emailService } from './services/emailService';
-import { API_BASE, safeRandomUUID } from './lib/utils';
+import { API_BASE, safeRandomUUID, validateCPF } from './lib/utils';
 import { canAccessTab, getDefaultTabForUser, isDentistTab, isPatientTab } from './lib/permissions';
 import LoadingOverlay from './components/LoadingOverlay';
 import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
@@ -148,6 +148,8 @@ const getFriendlyLoginErrorMessage = (error: unknown) => {
 
   return 'Não foi possível autenticar agora. Verifique e-mail/senha e tente novamente.';
 };
+
+const normalizeCpfValue = (value: unknown) => String(value || '').replace(/\D/g, '');
 
 export default function App() {
   const [globalLoading, setGlobalLoading] = useState(false);
@@ -293,7 +295,7 @@ export default function App() {
       }
     }
 
-    const item: NotificationItem = { id, ...notif, countedForBadge: counted, showAsToast: true };
+    const item: NotificationItem = { ...notif, id, countedForBadge: counted, showAsToast: true };
 
     // Suppress toast popups during the first app mount (login) for dentists — keep the badge count but avoid flooding the screen with toasts.
     if (initialMountRef.current && user?.role === 'dentist') {
@@ -594,6 +596,7 @@ export default function App() {
   const createManagedUserFromServer = async (payload: {
     name: string;
     email: string;
+    cpf: string;
     phone?: string;
     password: string;
     role: UserRole;
@@ -642,6 +645,7 @@ export default function App() {
   const createManagedUserLocally = async (payload: {
     name: string;
     email: string;
+    cpf: string;
     phone?: string;
     password: string;
     role: UserRole;
@@ -666,6 +670,7 @@ export default function App() {
       id: generatedId,
       name: payload.name,
       email: payload.email,
+      cpf: payload.cpf,
       phone: payload.phone || '',
       role: payload.role,
       permissions: payload.permissions || [],
@@ -718,6 +723,7 @@ export default function App() {
   const addUser = async (data: Omit<User, 'id'>) => {
     const email = data.email.trim().toLowerCase();
     const password = (data as any).password as string | undefined;
+    const normalizedCpf = normalizeCpfValue((data as any).cpf);
 
     if (!auth.currentUser) {
       throw new Error('Sessao sem autenticacao Firebase. Faca logout e login novamente para criar usuarios.');
@@ -731,6 +737,19 @@ export default function App() {
       );
     }
 
+    if (!normalizedCpf) {
+      throw new Error('CPF é obrigatório para novos cadastros de usuários.');
+    }
+
+    if (!validateCPF(normalizedCpf)) {
+      throw new Error('CPF inválido. Verifique os dígitos informados.');
+    }
+
+    const existingUserByCpf = users.find((u) => normalizeCpfValue((u as any).cpf) === normalizedCpf);
+    if (existingUserByCpf) {
+      throw new Error(`CPF já cadastrado para ${existingUserByCpf.name}.`);
+    }
+
     if (!password || password.length < 6) {
       throw new Error('Senha deve ter pelo menos 6 caracteres para criar conta no Firebase Auth.');
     }
@@ -740,6 +759,7 @@ export default function App() {
     const payload = {
       name: data.name,
       email,
+      cpf: normalizedCpf,
       phone: data.phone,
       password,
       role: data.role,
@@ -768,6 +788,7 @@ export default function App() {
       ...(stripPassword(data as any) as Omit<User, 'id'>),
       id: String(serverPayload?.user?.id || ''),
       email,
+      cpf: normalizedCpf,
       role: data.role,
       permissions: (data as any).permissions || [],
       phone: data.phone || '',
@@ -1297,6 +1318,7 @@ export default function App() {
         role: 'dentist',
         permissions: ['patients', 'appointments', 'treatments'],
         phone: newDentist.phone,
+        ...(newDentist.cpf ? { cpf: newDentist.cpf } : {}),
         ...(authUid ? { authUid } : {})
       };
       await setDoc(doc(db, 'users', id), newUser);
@@ -1344,7 +1366,8 @@ export default function App() {
       await setDoc(userRef, {
         name: updated.name,
         email: updated.email,
-        phone: updated.phone
+        phone: updated.phone,
+        ...(updated.cpf ? { cpf: updated.cpf } : {})
       }, { merge: true });
       await setDoc(userRef, { password: deleteField() }, { merge: true }).catch(() => {});
       
@@ -2061,11 +2084,15 @@ export default function App() {
   const normalizedUserEmail = String(user.email || '').trim().toLowerCase();
   const patientData = isPatient
     ? (
-      patients.find((p: any) =>
-        p.id === user.id
-        || ((p as any).authUid && firebaseAuthUid && (p as any).authUid === firebaseAuthUid)
-        || ((p as any).email && normalizedUserEmail !== '' && String((p as any).email || '').trim().toLowerCase() === normalizedUserEmail)
-      )
+      // Prefere o titular (sem dependentOf) para evitar resolver para um dependente com mesmo e-mail
+      (() => {
+        const candidates = patients.filter((p: any) =>
+          p.id === user.id
+          || ((p as any).authUid && firebaseAuthUid && (p as any).authUid === firebaseAuthUid)
+          || ((p as any).email && normalizedUserEmail !== '' && String((p as any).email || '').trim().toLowerCase() === normalizedUserEmail)
+        );
+        return candidates.find((p: any) => !(p as any).dependentOf) || candidates[0] || null;
+      })()
       || {
         id: user.id,
         name: user.name || 'Paciente',
@@ -2311,7 +2338,7 @@ export default function App() {
         <ProfileEditModal 
           isOpen={isProfileEditOpen} 
           onClose={() => setIsProfileEditOpen(false)} 
-          user={user}
+          user={isPatient && patientData?.cpf && !user.cpf ? { ...user, cpf: patientData.cpf } : user}
           onUpdateUser={updateUser}
           onOpenPasswordChange={() => {
             setIsProfileEditOpen(false);
@@ -2367,6 +2394,13 @@ export default function App() {
       
       <main className="flex-1 lg:pl-0 pt-16 lg:pt-0">
         <AnnouncementBanner announcements={announcements} userRole={user.role} />
+        {user.role !== 'patient' && normalizeCpfValue((user as any).cpf).length !== 11 && (
+          <div className="mx-auto max-w-7xl px-4 pt-4 lg:px-8">
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Seu cadastro está incompleto: informe seu CPF em &quot;Editar Perfil&quot; para facilitar a recuperação de senha e identificação no sistema.
+            </div>
+          </div>
+        )}
         <div className="max-w-7xl mx-auto">
           {shouldRenderPatientPortal && patientData ? (
             <PatientPortal 

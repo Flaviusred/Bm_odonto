@@ -10,7 +10,7 @@ export function subscribe(fn: Subscriber) {
   subscribers.add(fn);
   // notificar estado atual imediatamente
   try { fn(state); } catch (e) {}
-  return () => subscribers.delete(fn);
+  return () => { subscribers.delete(fn); };
 }
 
 export function setLoading(v: boolean) {

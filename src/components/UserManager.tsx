@@ -4,7 +4,7 @@ import { Button } from './Button';
 import { Input } from './Input';
 import { User, UserRole } from '../types';
 import { UserPlus, Shield, Trash2, Award, Search, Filter, CheckCircle, AlertTriangle, UserX, UserCheck } from 'lucide-react';
-import { cn, maskPhone } from '../lib/utils';
+import { cn, maskCPF, maskPhone, validateCPF } from '../lib/utils';
 import { Modal } from './Modal';
 
 interface UserManagerProps {
@@ -32,7 +32,7 @@ const availablePermissions = [
 
 export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUpdateUserPermissions }: UserManagerProps) {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'attendant' as UserRole, phone: '' });
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'attendant' as UserRole, phone: '', cpf: '' });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [searchTerm, setSearchTerm] = useState('');
   const [roleFilter, setRoleFilter] = useState<UserRole | 'all'>('all');
@@ -50,6 +50,10 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
     setNewUser({...newUser, phone: maskPhone(e.target.value)});
   };
 
+  const handleCpfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setNewUser({ ...newUser, cpf: maskCPF(e.target.value) });
+  };
+
   const validate = () => {
     const newErrors: Record<string, string> = {};
     if (!newUser.name.trim()) newErrors.name = 'Nome é obrigatório';
@@ -63,6 +67,11 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
     } else if (newUser.password.length < 6) {
       newErrors.password = 'A senha deve ter pelo menos 6 caracteres';
     }
+    if (!newUser.cpf.trim()) {
+      newErrors.cpf = 'CPF é obrigatório';
+    } else if (!validateCPF(newUser.cpf)) {
+      newErrors.cpf = 'CPF inválido';
+    }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -74,8 +83,8 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
     const userName = newUser.name.trim();
     const userRole = newUser.role;
     try {
-      await Promise.resolve(onAddUser({ ...newUser, permissions: [] }));
-      setNewUser({ name: '', email: '', password: '', role: 'attendant', phone: '' });
+      await Promise.resolve(onAddUser({ ...newUser, cpf: newUser.cpf.replace(/\D/g, ''), permissions: [] }));
+      setNewUser({ name: '', email: '', password: '', role: 'attendant', phone: '', cpf: '' });
       setErrors({});
       setIsAddModalOpen(false);
       setSuccessInfo({ name: userName, role: userRole });
@@ -180,6 +189,10 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
                       )}
                     </div>
                     <p className="text-sm text-zinc-500">{user.email}</p>
+                      <p className="text-sm text-zinc-500">CPF: {user.cpf ? maskCPF(user.cpf) : 'Não informado'}</p>
+                      {user.role !== 'patient' && !user.cpf && (
+                        <span className="inline-block mt-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">Cadastro incompleto</span>
+                      )}
                   </div>
                   <div className="flex items-center gap-1 w-full sm:w-auto justify-end">
                     <button
@@ -281,6 +294,15 @@ export function UserManager({ users, onAddUser, onDeleteUser, onUpdateUser, onUp
             value={newUser.phone} 
             autoComplete="tel"
             onChange={handlePhoneChange}
+          />
+          <Input
+            label="CPF"
+            type="text"
+            value={newUser.cpf}
+            onChange={handleCpfChange}
+            autoComplete="off"
+            error={errors.cpf}
+            required
           />
           <Input 
             label="Senha" 

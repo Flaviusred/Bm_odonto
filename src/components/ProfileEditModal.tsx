@@ -4,6 +4,7 @@ import { Input } from './Input';
 import { Button } from './Button';
 import { User } from '../types';
 import { Upload } from 'lucide-react';
+import { maskCPF, validateCPF } from '../lib/utils';
 
 const PROFILE_IMAGE_MAX_MB = 1;
 const PROFILE_IMAGE_MAX_BYTES = PROFILE_IMAGE_MAX_MB * 1024 * 1024;
@@ -21,6 +22,7 @@ export function ProfileEditModal({ isOpen, onClose, user, onUpdateUser, onOpenPa
   const [formData, setFormData] = useState({
     name: user.name,
     email: user.email,
+    cpf: maskCPF(user.cpf || ''),
     phone: user.phone || '',
     photoURL: user.photoURL || '',
   });
@@ -33,6 +35,9 @@ export function ProfileEditModal({ isOpen, onClose, user, onUpdateUser, onOpenPa
       newErrors.email = 'Email é obrigatório';
     } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
       newErrors.email = 'Email inválido';
+    }
+    if (formData.cpf.trim() && !validateCPF(formData.cpf)) {
+      newErrors.cpf = 'CPF inválido';
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -77,12 +82,17 @@ export function ProfileEditModal({ isOpen, onClose, user, onUpdateUser, onOpenPa
     setFormData({...formData, phone: maskedValue});
   };
 
+  const handleCpfChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormData({ ...formData, cpf: maskCPF(e.target.value) });
+  };
+
   const [showConfirm, setShowConfirm] = useState(false);
 
   React.useEffect(() => {
     setFormData({
       name: user.name,
       email: user.email,
+      cpf: maskCPF(user.cpf || ''),
       phone: user.phone || '',
       photoURL: user.photoURL || '',
     });
@@ -103,7 +113,7 @@ export function ProfileEditModal({ isOpen, onClose, user, onUpdateUser, onOpenPa
   };
 
   const confirmUpdate = () => {
-    onUpdateUser({ ...user, ...formData });
+    onUpdateUser({ ...user, ...formData, cpf: formData.cpf.replace(/\D/g, '') });
     onClose();
   };
 
@@ -134,6 +144,12 @@ export function ProfileEditModal({ isOpen, onClose, user, onUpdateUser, onOpenPa
           </div>
           <Input label="Nome" value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} error={errors.name} required />
           <Input label="Email" type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} error={errors.email} required />
+          {user.role !== 'patient' && !user.cpf && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Cadastro incompleto: preencha seu CPF abaixo para facilitar a recuperação de senha.
+            </div>
+          )}
+          <Input label="CPF" type="text" value={formData.cpf} onChange={handleCpfChange} error={errors.cpf} />
           <Input label="Telefone" type="tel" value={formData.phone} onChange={handlePhoneChange} />
           <div className="flex justify-between pt-4">
             <Button type="button" variant="outline" onClick={onOpenPasswordChange}>Alterar Senha</Button>

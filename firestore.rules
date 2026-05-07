@@ -100,7 +100,11 @@ service cloud.firestore {
       allow create: if isSignedIn() && (
         request.auth.uid == userId
         || request.auth.uid == request.resource.data.authUid
-        || hasUsersPermission()
+        || (
+          hasUsersPermission()
+          && request.resource.data.cpf is string
+          && request.resource.data.cpf.matches('^[0-9]{11}$')
+        )
       );
 
       // Leitura de documento único: o próprio usuário, por authUid, por email, ou staff

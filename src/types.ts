@@ -49,6 +49,7 @@ export interface Dentist {
   phone: string;
   specialty: string;
   cro: string;
+  cpf?: string;
   createdAt: string;
   isActive: boolean;
   password?: string;
