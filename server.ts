@@ -723,6 +723,119 @@ app.post('/api/admin/users/:id/password', requireAuth, async (req: any, res: any
   }
 });
 
+app.post('/api/admin/users/:id/email', requireAuth, async (req: any, res: any) => {
+  const targetUserId = String(req.params?.id || '').trim();
+  const newEmail = String(req.body?.newEmail || '').trim().toLowerCase();
+  const previousEmail = String(req.body?.previousEmail || '').trim().toLowerCase();
+  const requesterUid = String(req.firebaseUser?.uid || '').trim();
+
+  if (!targetUserId || !newEmail) {
+    return res.status(400).json({ error: 'id e newEmail são obrigatórios' });
+  }
+  if (!db || typeof db.collection !== 'function') {
+    return res.status(500).json({ error: 'Firestore indisponível no servidor.' });
+  }
+
+  try {
+    const requesterRole = await getRoleForFirebaseUid(requesterUid);
+
+    const targetUserRef = db.collection('users').doc(targetUserId);
+    const targetUserSnap = await targetUserRef.get();
+    const targetUserData = targetUserSnap.exists ? (targetUserSnap.data() || {}) : {};
+
+    const emailCandidates = uniqueNonEmptyStrings([
+      newEmail,
+      previousEmail,
+      (targetUserData as any).email,
+    ].map((value) => String(value || '').trim().toLowerCase()));
+
+    const authUidCandidates = uniqueNonEmptyStrings([
+      (targetUserData as any).authUid,
+      targetUserId,
+      req.body?.authUid,
+    ]);
+
+    const collectCandidatesFromDoc = (snap: any) => {
+      if (!snap || !snap.exists) return;
+      const data = snap.data() || {};
+      authUidCandidates.push(String((data as any).authUid || ''));
+      emailCandidates.push(String((data as any).email || '').trim().toLowerCase());
+    };
+
+    const directCollections: Array<'users' | 'patients' | 'dentists' | 'attendants'> = ['users', 'patients', 'dentists', 'attendants'];
+    for (const collectionName of directCollections) {
+      const snap = await db.collection(collectionName).doc(targetUserId).get();
+      collectCandidatesFromDoc(snap);
+    }
+
+    const usersByAuthUidSnap = await db.collection('users').where('authUid', '==', targetUserId).limit(1).get();
+    usersByAuthUidSnap.forEach((item: any) => collectCandidatesFromDoc(item));
+
+    for (const candidateEmail of uniqueNonEmptyStrings(emailCandidates)) {
+      const collectionsByEmail: Array<'users' | 'patients' | 'dentists' | 'attendants'> = ['users', 'patients', 'dentists', 'attendants'];
+      for (const collectionName of collectionsByEmail) {
+        const snapByEmail = await db.collection(collectionName).where('email', '==', candidateEmail).limit(2).get();
+        snapByEmail.forEach((item: any) => collectCandidatesFromDoc(item));
+      }
+    }
+
+    for (const candidateEmail of uniqueNonEmptyStrings(emailCandidates)) {
+      try {
+        const byEmail = await admin.auth().getUserByEmail(candidateEmail);
+        if (byEmail?.uid) authUidCandidates.push(byEmail.uid);
+      } catch (e: any) {
+        if (e?.code !== 'auth/user-not-found') throw e;
+      }
+    }
+
+    let targetAuthUid: string | null = null;
+    for (const authUid of uniqueNonEmptyStrings(authUidCandidates)) {
+      try {
+        await admin.auth().getUser(authUid);
+        targetAuthUid = authUid;
+        break;
+      } catch (authErr: any) {
+        if (authErr?.code === 'auth/user-not-found') continue;
+        throw authErr;
+      }
+    }
+
+    if (!targetAuthUid) {
+      return res.status(404).json({ error: 'Usuário de autenticação não encontrado para atualização de e-mail.' });
+    }
+
+    const canManage = requesterRole === 'admin' || requesterUid === targetAuthUid;
+    if (!canManage) {
+      return res.status(403).json({ error: 'Sem permissão para atualizar este e-mail.' });
+    }
+
+    try {
+      await admin.auth().updateUser(targetAuthUid, { email: newEmail });
+    } catch (authErr: any) {
+      if (authErr?.code === 'auth/email-already-exists') {
+        return res.status(409).json({ error: 'Já existe uma conta de autenticação com este e-mail.' });
+      }
+      throw authErr;
+    }
+
+    await targetUserRef.set({ email: newEmail, authUid: targetAuthUid }, { merge: true });
+
+    const mirrorCollections: Array<'patients' | 'dentists' | 'attendants'> = ['patients', 'dentists', 'attendants'];
+    for (const collectionName of mirrorCollections) {
+      const mirrorRef = db.collection(collectionName).doc(targetUserId);
+      const mirrorSnap = await mirrorRef.get();
+      if (mirrorSnap.exists) {
+        await mirrorRef.set({ email: newEmail, authUid: targetAuthUid }, { merge: true });
+      }
+    }
+
+    return res.json({ status: 'ok', authUid: targetAuthUid });
+  } catch (err) {
+    console.error('/api/admin/users/:id/email error:', err);
+    return res.status(500).json({ error: 'Falha ao atualizar e-mail no Auth.', details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 app.post('/api/admin/auth/create-user', requireAuth, async (req: any, res: any) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const password = String(req.body?.password || '');

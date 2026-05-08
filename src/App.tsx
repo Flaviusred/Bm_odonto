@@ -866,6 +866,35 @@ export default function App() {
     }
   };
 
+  const syncAuthEmail = async (userId: string, newEmail: string, previousEmail?: string) => {
+    const normalizedNewEmail = String(newEmail || '').trim().toLowerCase();
+    const normalizedPreviousEmail = String(previousEmail || '').trim().toLowerCase();
+    if (!normalizedNewEmail || normalizedNewEmail === normalizedPreviousEmail) return;
+
+    const currentAuthUser = auth.currentUser;
+    if (!currentAuthUser) {
+      throw new Error('Sessão expirada. Faça login novamente para atualizar o e-mail.');
+    }
+
+    const idToken = await currentAuthUser.getIdToken();
+    const response = await fetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/email`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({
+        newEmail: normalizedNewEmail,
+        previousEmail: normalizedPreviousEmail,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Falha ao atualizar e-mail no Firebase Auth.');
+    }
+  };
+
   const updateUser = async (updated: User) => {
     console.log('Updating user:', updated);
     
@@ -877,8 +906,22 @@ export default function App() {
     // Atualização no Firebase Firestore
     try {
       await runWithLoading(async () => {
+        const existingUser = users.find((u) => u.id === updated.id);
+        const normalizedUpdatedEmail = String(updated.email || '').trim().toLowerCase();
+        const normalizedExistingEmail = String(existingUser?.email || '').trim().toLowerCase();
+        const normalizedCurrentAuthEmail = String(auth.currentUser?.email || '').trim().toLowerCase();
+        const shouldSyncEmail =
+          normalizedUpdatedEmail !== ''
+          && (
+            normalizedExistingEmail !== normalizedUpdatedEmail
+            || normalizedCurrentAuthEmail !== '' && normalizedCurrentAuthEmail !== normalizedUpdatedEmail
+          );
+
+        if (shouldSyncEmail) {
+          await syncAuthEmail(updated.id, updated.email, existingUser?.email || auth.currentUser?.email || '');
+        }
+
         if ((updated as any).password) {
-          const existingUser = users.find((u) => u.id === updated.id);
           await syncAuthPassword(updated.id, String((updated as any).password), updated.email, existingUser?.email);
         }
 
