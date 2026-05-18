@@ -46,6 +46,7 @@ jobs:
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
         run: node scripts/deploy-firestore-rules.cjs
+FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 # Notes:
 # - Create the repository secrets listed in the README below before pushing.
