@@ -1,5 +1,6 @@
 name: Deploy Firebase Hosting
 
+
 on:
   push:
     branches:
@@ -14,7 +15,7 @@ on:
       - "firebase.json"
       - "firestore.rules"
   workflow_dispatch:
-
+FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 jobs:
   deploy:
     runs-on: ubuntu-latest

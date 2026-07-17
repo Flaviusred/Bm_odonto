@@ -1,0 +1,21 @@
+node_modules/
+dist/
+.git/
+.gitignore
+
+# Variáveis de ambiente (injetadas via docker-compose)
+.env
+.env.local
+.env.*.local
+
+# Logs e dados temporários
+tmp/
+*.log
+
+# Backups e artefatos de deploy
+backup/
+-c/
+
+# Arquivos de desenvolvimento
+*.md
+!README.md

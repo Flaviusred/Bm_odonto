@@ -27,3 +27,4 @@ jobs:
         run: npm run notifications:check-overdue
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

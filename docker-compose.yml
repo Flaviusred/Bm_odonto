@@ -1,0 +1,129 @@
+version: "3.9"
+
+# ──────────────────────────────────────────────────────────────────────────────
+#  BM Odonto — Stack Docker para Portainer
+#  Endereço público : https://dev.bombeiros.pb.gov.br/bravoOdonto/
+#  Rede externa     : traefik-public  (Traefik edge)
+#  Rede interna     : infra_agent_network  (comunicação entre serviços)
+#
+#  COMO FAZER O DEPLOY NO PORTAINER:
+#    1. Construa a imagem no servidor Docker antes de criar a stack:
+#         docker build -t bm-odonto:latest .
+#    2. No Portainer → Stacks → Add Stack → cole este arquivo.
+#    3. Na seção "Environment variables" do Portainer, defina todas as
+#       variáveis marcadas como obrigatórias (sem valor padrão).
+#    4. Certifique-se que as redes traefik-public e infra_agent_network
+#       já existem antes de fazer o deploy.
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+  bm-odonto:
+    # Imagem pré-construída no servidor. Execute antes do primeiro deploy:
+    #   docker build -t bm-odonto:latest .
+    # Para registry privada, troque por: registry.seudominio.com/bm-odonto:latest
+    image: bm-odonto:latest
+    container_name: bm-odonto
+    restart: unless-stopped
+
+    # ── Variáveis de ambiente ─────────────────────────────────────────────────
+    # Variáveis com ${VAR} são injetadas pela aba "Environment variables"
+    # do Portainer ao criar/atualizar a stack.
+    # Sintaxe ${VAR:-default} usa o valor padrão se a variável não for definida.
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # URL base aceita pelo servidor Express (proxy reverso Traefik)
+      - APP_ORIGIN=${APP_ORIGIN:-https://dev.bombeiros.pb.gov.br}
+
+      # ── Firebase Admin SDK ──────────────────────────────────────────────────
+      # JSON da service account em UMA ÚNICA LINHA (escape de \n obrigatório)
+      - FIREBASE_SERVICE_ACCOUNT=${FIREBASE_SERVICE_ACCOUNT}
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}
+      - FIREBASE_DATABASE_ID=${FIREBASE_DATABASE_ID}
+
+      # ── E-mail / SMTP ───────────────────────────────────────────────────────
+      - SMTP_PROVIDER=${SMTP_PROVIDER:-gmail}
+      - EMAIL_USER=${EMAIL_USER}
+      - EMAIL_PASS=${EMAIL_PASS}
+      - EMAIL_FROM=${EMAIL_FROM}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+
+      # ── Google OAuth / Calendar ─────────────────────────────────────────────
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI:-https://dev.bombeiros.pb.gov.br/auth/google/callback}
+
+      # ── APIs externas ───────────────────────────────────────────────────────
+      - CBMPB_API_TOKEN=${CBMPB_API_TOKEN}
+      - CBMPB_BASE_URL=${CBMPB_BASE_URL}
+      - SITE_URL=${SITE_URL:-https://dev.bombeiros.pb.gov.br/bravoOdonto}
+
+      # ── Gemini AI ───────────────────────────────────────────────────────────
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+
+      # ── Twilio SMS ──────────────────────────────────────────────────────────
+      - TWILIO_SID=${TWILIO_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_PHONE=${TWILIO_PHONE}
+
+    # ── Healthcheck ───────────────────────────────────────────────────────────
+    # O Portainer usa o status do healthcheck para exibir a saúde do container.
+    # Usa wget (disponível na imagem node:alpine) para checar se o servidor responde.
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # ── Volumes permanentes (gerenciados pelo Portainer) ──────────────────────
+    volumes:
+      # Persiste os logs de debug do servidor entre reinicializações
+      - bm_odonto_tmp:/app/tmp
+      # Para persistir o data.json (cache local do Firebase), descomente:
+      # - /opt/bm-odonto/data.json:/app/data.json
+
+    # ── Redes ─────────────────────────────────────────────────────────────────
+    networks:
+      - traefik-public
+      - infra_agent_network
+
+    # ── Labels do Traefik ─────────────────────────────────────────────────────
+    labels:
+      - "traefik.enable=true"
+
+      # ---------- Roteador HTTP (redireciona para HTTPS) ----------
+      - "traefik.http.routers.bm-odonto-http.rule=Host(`dev.bombeiros.pb.gov.br`) && PathPrefix(`/bravoOdonto`)"
+      - "traefik.http.routers.bm-odonto-http.entrypoints=web"
+      - "traefik.http.routers.bm-odonto-http.middlewares=bm-odonto-https-redirect"
+
+      # ---------- Roteador HTTPS ----------
+      - "traefik.http.routers.bm-odonto.rule=Host(`dev.bombeiros.pb.gov.br`) && PathPrefix(`/bravoOdonto`)"
+      - "traefik.http.routers.bm-odonto.entrypoints=websecure"
+      - "traefik.http.routers.bm-odonto.tls=true"
+      - "traefik.http.routers.bm-odonto.tls.certresolver=letsencrypt"
+
+      # ---------- Serviço (porta interna do container) ----------
+      - "traefik.http.services.bm-odonto.loadbalancer.server.port=3000"
+      # Traefik precisa saber qual rede usar para alcançar o container
+      - "traefik.docker.network=traefik-public"
+
+      # ---------- Middleware: redireciona HTTP → HTTPS ----------
+      - "traefik.http.middlewares.bm-odonto-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.bm-odonto-https-redirect.redirectscheme.permanent=true"
+
+# ── Volumes nomeados (visíveis e gerenciáveis pelo Portainer) ──────────────────
+volumes:
+  bm_odonto_tmp:
+    name: bm_odonto_tmp
+
+# ── Redes externas (devem existir antes do deploy) ────────────────────────────
+networks:
+  traefik-public:
+    external: true
+  infra_agent_network:
+    external: true
