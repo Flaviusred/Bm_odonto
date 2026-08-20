@@ -1445,7 +1445,9 @@ const sendViaResend = async (from: string, to: string, subject: string, html?: s
   const body: Record<string, any> = { from, to: [to], subject };
   if (html) body.html = html;
   if (text) body.text = text;
-  if (replyTo) body.reply_to = replyTo;
+  // Resend rejects reply_to that isn't plain "a@b.c" or "Name <a@b.c>"
+  const validEmailField = (v: string) => /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$|^.+<[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>$/.test(v.trim());
+  if (replyTo && validEmailField(replyTo)) body.reply_to = replyTo;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
