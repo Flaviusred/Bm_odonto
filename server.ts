@@ -1438,6 +1438,25 @@ app.post('/api/fix-dependents-emails', (req, res) => {
 });
 
 // Reminder Logic
+// HTTP-based email via Resend API — bypasses SMTP (Railway, Render, etc. block outbound SMTP)
+const sendViaResend = async (from: string, to: string, subject: string, html?: string, text?: string, replyTo?: string) => {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) throw new Error('RESEND_API_KEY not configured');
+  const body: Record<string, any> = { from, to: [to], subject };
+  if (html) body.html = html;
+  if (text) body.text = text;
+  if (replyTo) body.reply_to = replyTo;
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json() as any;
+  if (!res.ok) throw new Error(`Resend API error ${res.status}: ${data.message || res.statusText}`);
+  console.log(`Email sent via Resend to ${to} (id=${data.id})`);
+  return data;
+};
+
 // Create a nodemailer transporter based on environment configuration.
 const createTransportFromEnv = () => {
   const provider = (process.env.SMTP_PROVIDER || "gmail").toLowerCase();
@@ -1607,6 +1626,12 @@ const sendEmail = async (to: string, subject: string, text?: string, html?: stri
         appendDebugLog(dbgLine);
       } catch (dbgErr) { console.warn('sendEmail debug log error', dbgErr); }
 
+    // Resend HTTP API bypasses SMTP entirely — preferred on cloud platforms
+    if (process.env.RESEND_API_KEY) {
+      const plainText = text || (finalHtml ? finalHtml.replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ') : undefined);
+      return sendViaResend(fromAddress, to, subject, finalHtml, plainText, replyTo);
+    }
+
     // Prepare mail options and attach logo inline (CID)
     const plain = text || (finalHtml ? finalHtml.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ') : undefined);
 
@@ -1740,6 +1765,11 @@ const sendRawEmail = async (to: string, subject: string, text?: string, html?: s
   } catch (dbgErr) { console.warn('sendRawEmail debug log error', dbgErr); }
 
   const plain = text || (finalHtml ? finalHtml.replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ') : '');
+
+  // Resend HTTP API bypasses SMTP entirely — preferred on cloud platforms
+  if (process.env.RESEND_API_KEY) {
+    return sendViaResend(fromAddress, to, subject, finalHtml, plain, replyTo);
+  }
 
   // Read inline image as base64
   let imageBase64 = '';
