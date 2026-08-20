@@ -1438,6 +1438,33 @@ app.post('/api/fix-dependents-emails', (req, res) => {
 });
 
 // Reminder Logic
+// HTTP-based email via Brevo API — bypasses SMTP, aceita domínios não verificados
+const sendViaBrevo = async (from: string, to: string, subject: string, html?: string, text?: string) => {
+  const apiKey = process.env.BREVO_API_KEY;
+  if (!apiKey) throw new Error('BREVO_API_KEY not configured');
+  // Extrai "Nome" e "email" do formato "Nome <email>" ou "email"
+  const parseAddr = (addr: string) => {
+    const m = addr.match(/^(.+)<([^>]+)>$/);
+    return m ? { name: m[1].trim(), email: m[2].trim() } : { name: addr, email: addr };
+  };
+  const body: Record<string, any> = {
+    sender: parseAddr(from),
+    to: [parseAddr(to)],
+    subject,
+  };
+  if (html) body.htmlContent = html;
+  if (text) body.textContent = text;
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: { 'api-key': apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json() as any;
+  if (!res.ok) throw new Error(`Brevo API error ${res.status}: ${data.message || res.statusText}`);
+  console.log(`Email sent via Brevo to ${to} (messageId=${data.messageId})`);
+  return data;
+};
+
 // HTTP-based email via Resend API — bypasses SMTP (Railway, Render, etc. block outbound SMTP)
 const sendViaResend = async (from: string, to: string, subject: string, html?: string, text?: string, replyTo?: string) => {
   const apiKey = process.env.RESEND_API_KEY;
@@ -1628,9 +1655,12 @@ const sendEmail = async (to: string, subject: string, text?: string, html?: stri
         appendDebugLog(dbgLine);
       } catch (dbgErr) { console.warn('sendEmail debug log error', dbgErr); }
 
-    // Resend HTTP API bypasses SMTP entirely — preferred on cloud platforms
+    // HTTP API bypasses SMTP entirely — preferred on cloud platforms
+    const plainText = text || (finalHtml ? finalHtml.replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ') : undefined);
+    if (process.env.BREVO_API_KEY) {
+      return sendViaBrevo(fromAddress, to, subject, finalHtml, plainText);
+    }
     if (process.env.RESEND_API_KEY) {
-      const plainText = text || (finalHtml ? finalHtml.replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ') : undefined);
       return sendViaResend(fromAddress, to, subject, finalHtml, plainText, replyTo);
     }
 
@@ -1768,7 +1798,10 @@ const sendRawEmail = async (to: string, subject: string, text?: string, html?: s
 
   const plain = text || (finalHtml ? finalHtml.replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ') : '');
 
-  // Resend HTTP API bypasses SMTP entirely — preferred on cloud platforms
+  // HTTP API bypasses SMTP entirely — preferred on cloud platforms
+  if (process.env.BREVO_API_KEY) {
+    return sendViaBrevo(fromAddress, to, subject, finalHtml, plain);
+  }
   if (process.env.RESEND_API_KEY) {
     return sendViaResend(fromAddress, to, subject, finalHtml, plain, replyTo);
   }
