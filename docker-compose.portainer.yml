@@ -1,0 +1,60 @@
+---
+services:
+  bm-odonto:
+    image: flaviusred47/bm_odonto:latest
+    container_name: bm-odonto
+    restart: unless-stopped
+
+    ports:
+      - "3000:3000"
+
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+
+      # Firebase Admin SDK
+      FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-odonto-490913}
+      FIREBASE_DATABASE_ID: ${FIREBASE_DATABASE_ID:-ai-studio-f268cd8f-e6a5-4bba-b421-df1c4dc1d11c}
+
+      # CORS (adicione mais domínios separados por vírgula quando necessário)
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+
+      # SMTP/e-mail
+      SMTP_PROVIDER: ${SMTP_PROVIDER:-gmail}
+      EMAIL_USER: ${EMAIL_USER}
+      EMAIL_PASS: ${EMAIL_PASS}
+      EMAIL_FROM: ${EMAIL_FROM}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+
+      # Google OAuth / Calendar
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}
+
+      # Outras integrações
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      TWILIO_SID: ${TWILIO_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_PHONE: ${TWILIO_PHONE}
+      CBMPB_API_TOKEN: ${CBMPB_API_TOKEN}
+      CBMPB_BASE_URL: ${CBMPB_BASE_URL}
+      SITE_URL: ${SITE_URL}
+
+    volumes:
+      - bm_odonto_tmp:/app/tmp
+
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  bm_odonto_tmp:
+    name: bm_odonto_tmp
