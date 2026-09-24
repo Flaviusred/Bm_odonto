@@ -50,6 +50,8 @@ export function AttendantList({ attendants, onAddAttendant, onDeleteAttendant, o
       const cleanPhone = formData.phone.replace(/\D/g, '');
       if (cleanPhone.length > 0 && (cleanPhone.length < 10 || cleanPhone.length > 11)) newErrors.phone = 'Telefone inválido (10 ou 11 dígitos)';
     }
+
+    if (formData.password && formData.password.length < 6) newErrors.password = 'Senha deve ter pelo menos 6 caracteres';
     
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -108,7 +110,7 @@ export function AttendantList({ attendants, onAddAttendant, onDeleteAttendant, o
         onClose={() => {
           setIsModalOpen(false);
           setEditingAttendant(null);
-          setFormData({ name: '', email: '', phone: '' });
+          setFormData({ name: '', email: '', phone: '', password: '' });
           setErrors({});
         }} 
         title={editingAttendant ? "Editar Atendente" : "Novo Atendente"}
@@ -145,6 +147,17 @@ export function AttendantList({ attendants, onAddAttendant, onDeleteAttendant, o
               type="password" 
               required 
               value={formData.password}
+              error={errors.password}
+              onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+            />
+          )}
+          {editingAttendant && (
+            <Input 
+              label="Nova Senha (opcional)" 
+              type="password" 
+              placeholder="Deixe em branco para manter a senha atual"
+              value={formData.password}
+              error={errors.password}
               onChange={(e) => setFormData({ ...formData, password: e.target.value })}
             />
           )}

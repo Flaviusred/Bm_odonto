@@ -806,6 +806,82 @@ app.post('/api/update-user-email', async (req, res) => {
   }
 });
 
+// Permite que um admin defina diretamente a senha de um usuário (Atendente, Dentista, Paciente etc.),
+// sincronizando Firebase Auth e Firestore no mesmo padrão do fluxo de reset de senha.
+app.post('/api/admin/set-password', async (req, res) => {
+  const uid = String(req.body?.uid || '').trim();
+  const newPassword = String(req.body?.newPassword || '');
+
+  if (!uid || !newPassword) {
+    return res.status(400).json({ error: 'uid e newPassword são obrigatórios' });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: 'A senha deve ter pelo menos 6 caracteres.' });
+  }
+
+  try {
+    if (!db || typeof db.collection !== 'function') {
+      throw new Error('Firestore indisponível no servidor.');
+    }
+
+    const userRef = db.collection('users').doc(uid);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) {
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+    const userData = userSnap.data() || {};
+
+    let authUpdated = false;
+    let resolvedAuthUid = String(userData.authUid || uid);
+    const authUidCandidates = uniqueNonEmptyStrings([userData.authUid, uid]);
+    for (const authUid of authUidCandidates) {
+      try {
+        await admin.auth().updateUser(authUid, { password: newPassword });
+        authUpdated = true;
+        resolvedAuthUid = authUid;
+        break;
+      } catch (authErr: any) {
+        if (authErr?.code === 'auth/user-not-found') {
+          continue;
+        }
+        throw authErr;
+      }
+    }
+
+    if (!authUpdated) {
+      const emailForAuth = String(userData.email || '').trim().toLowerCase();
+      if (!emailForAuth) {
+        return res.status(500).json({ error: 'Não foi possível localizar a conta de autenticação para definir a senha.' });
+      }
+      try {
+        const existingAuthUser = await admin.auth().getUserByEmail(emailForAuth);
+        await admin.auth().updateUser(existingAuthUser.uid, { password: newPassword });
+        resolvedAuthUid = existingAuthUser.uid;
+        authUpdated = true;
+      } catch (lookupErr: any) {
+        if (lookupErr?.code === 'auth/user-not-found') {
+          const createdAuthUser = await admin.auth().createUser({ email: emailForAuth, password: newPassword });
+          resolvedAuthUid = createdAuthUser.uid;
+          authUpdated = true;
+        } else {
+          throw lookupErr;
+        }
+      }
+    }
+
+    await userRef.set({ password: newPassword, authUid: resolvedAuthUid }, { merge: true });
+    await updatePasswordMirrorIfExists('patients', uid, newPassword);
+    await updatePasswordMirrorIfExists('dentists', uid, newPassword);
+    await updatePasswordMirrorIfExists('attendants', uid, newPassword);
+
+    return res.json({ status: 'ok', authSynced: authUpdated });
+  } catch (err) {
+    console.error('/api/admin/set-password error:', err);
+    appendDebugLog(`/api/admin/set-password error: ${err instanceof Error ? err.message : String(err)}`);
+    return res.status(500).json({ error: 'Erro ao definir a senha.', details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // Web-friendly endpoint to trigger a test email (useful in production admin panel)
 app.post('/api/send-test-email', async (req, res) => {
   const to = req.body?.to || process.env.EMAIL_USER;

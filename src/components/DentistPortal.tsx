@@ -28,11 +28,9 @@ import {
 import { cn } from '../lib/utils';
 import { Toaster, toast } from 'sonner';
 
-const PDF_MAX_MB = 5;
-const RECORD_IMAGE_MAX_MB = 3;
+const PDF_MAX_MB = 1;
 const PDF_MAX_BYTES = PDF_MAX_MB * 1024 * 1024;
-const RECORD_IMAGE_MAX_BYTES = RECORD_IMAGE_MAX_MB * 1024 * 1024;
-const RECORD_ALLOWED_TYPES = ['application/pdf', 'image/jpeg', 'image/png'];
+const RECORD_ALLOWED_TYPES = ['application/pdf'];
 
 interface DentistPortalProps {
   activeTab: string;
@@ -344,7 +342,7 @@ export function DentistPortal({
 
   const [uploadForm, setUploadForm] = useState({
     name: '',
-    type: 'exam' as PatientDocument['type'],
+    type: 'Exame' as PatientDocument['type'],
     file: null as File | null,
   });
 
@@ -434,16 +432,12 @@ export function DentistPortal({
 
     // Validation
     if (!RECORD_ALLOWED_TYPES.includes(uploadForm.file.type)) {
-      toast.error('Tipo de arquivo inválido. Apenas PDF, JPG ou PNG são permitidos.');
+      toast.error('Tipo de arquivo inválido. Apenas PDF é permitido.');
       return;
     }
 
-    const isPdf = uploadForm.file.type === 'application/pdf';
-    const maxBytes = isPdf ? PDF_MAX_BYTES : RECORD_IMAGE_MAX_BYTES;
-    const maxLabel = isPdf ? `${PDF_MAX_MB}MB` : `${RECORD_IMAGE_MAX_MB}MB`;
-
-    if (uploadForm.file.size > maxBytes) {
-      toast.error(`Arquivo muito grande. Limite para este tipo: ${maxLabel}.`);
+    if (uploadForm.file.size > PDF_MAX_BYTES) {
+      toast.error(`Arquivo muito grande. Limite: ${PDF_MAX_MB}MB.`);
       return;
     }
 
@@ -459,7 +453,7 @@ export function DentistPortal({
 
     toast.success('Documento enviado com sucesso!');
     setIsUploadModalOpen(false);
-    setUploadForm({ name: '', type: 'exam', file: null });
+    setUploadForm({ name: '', type: 'Exame', file: null });
   };
 
   // Main Content Rendering
@@ -570,9 +564,9 @@ export function DentistPortal({
                     onChange={e => setDocFilter(e.target.value)}
                   >
                     <option value="all">Todos</option>
-                    <option value="exam">Exames</option>
-                    <option value="document">Documentos</option>
-                    <option value="x-ray">Raio-X</option>
+                    <option value="Exame">Exames</option>
+                    <option value="Documento">Documentos</option>
+                    <option value="Raio-X">Raio-X</option>
                   </select>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -1225,9 +1219,9 @@ export function DentistPortal({
               value={uploadForm.type}
               onChange={e => setUploadForm({...uploadForm, type: e.target.value as any})}
             >
-              <option value="exam">Exame</option>
-              <option value="document">Documento</option>
-              <option value="x-ray">Raio-X</option>
+              <option value="Exame">Exame</option>
+              <option value="Documento">Documento</option>
+              <option value="Raio-X">Raio-X</option>
             </select>
           </div>
           <div className="border-2 border-dashed border-zinc-200 rounded-xl p-8 text-center bg-zinc-50 cursor-pointer hover:bg-zinc-100 transition-colors" onClick={() => fileInputRef.current?.click()}>
@@ -1235,14 +1229,14 @@ export function DentistPortal({
               type="file" 
               ref={fileInputRef} 
               className="hidden" 
-              accept="application/pdf,image/jpeg,image/png"
+              accept="application/pdf"
               onChange={e => setUploadForm({...uploadForm, file: e.target.files?.[0] || null})}
             />
             <Upload className="h-8 w-8 text-zinc-400 mx-auto mb-2" />
             <p className="text-sm font-medium text-zinc-700">
               {uploadForm.file ? uploadForm.file.name : 'Clique ou arraste o arquivo aqui'}
             </p>
-            <p className="text-xs text-zinc-400 mt-1">PDF até 5MB | Imagens (JPG/PNG) até 3MB</p>
+            <p className="text-xs text-zinc-400 mt-1">Apenas PDF, até {PDF_MAX_MB}MB</p>
           </div>
           <div className="flex flex-col sm:flex-row justify-end gap-3 pt-2">
              <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={() => setIsUploadModalOpen(false)}>Cancelar</Button>

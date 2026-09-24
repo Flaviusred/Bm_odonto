@@ -1,23 +1,29 @@
-import { useState, Component } from 'react';
+import { useState, useRef, Component } from 'react';
 import React from 'react';
-import { Plus, Search, MoreVertical, Edit2, Trash2, Phone, Mail, Calendar, History, ChevronDown, ChevronUp, Stethoscope, UserRound, Award, Users, CornerDownRight, ArrowLeft } from 'lucide-react';
+import { Plus, Search, MoreVertical, Edit2, Trash2, Phone, Mail, Calendar, History, ChevronDown, ChevronUp, Stethoscope, UserRound, Award, Users, CornerDownRight, ArrowLeft, FileUp, Upload, FileText } from 'lucide-react';
 import { Button } from './Button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './Card';
 import { Input } from './Input';
 import { Modal } from './Modal';
-import { Patient, Appointment, Treatment, Dentist, PatientType } from '../types';
+import { Patient, Appointment, Treatment, Dentist, PatientType, PatientDocument } from '../types';
 import { patientService } from '../services/patientService';
 import { cn, validateCPF, maskCPF, maskPhone, maskCEP } from '../lib/utils';
 import { formatDateDDMMYYYY, formatDateLocal, parseDate, parseDateTime } from '../lib/dateUtils';
+
+const DOCUMENT_MAX_MB = 1;
+const DOCUMENT_MAX_BYTES = DOCUMENT_MAX_MB * 1024 * 1024;
+const DOCUMENT_ALLOWED_TYPES = ['application/pdf'];
 
 interface PatientListProps {
   patients: Patient[];
   appointments: Appointment[];
   treatments: Treatment[];
   dentists: Dentist[];
+  documents: PatientDocument[];
   onAddPatient: (patient: Omit<Patient, 'id' | 'createdAt' | 'isActive'> & { id?: string }) => void;
   onDeletePatient: (id: string) => void;
   onUpdatePatient: (patient: Patient) => void;
+  onAddDocument: (doc: Omit<PatientDocument, 'id' | 'uploadedAt'>) => void;
   onTabChange?: (tab: string) => void;
 }
 
@@ -26,9 +32,11 @@ export function PatientList({
   appointments, 
   treatments, 
   dentists, 
+  documents,
   onAddPatient, 
   onDeletePatient, 
   onUpdatePatient,
+  onAddDocument,
   onTabChange
 }: PatientListProps) {
   return (
@@ -37,9 +45,11 @@ export function PatientList({
       appointments={appointments} 
       treatments={treatments} 
       dentists={dentists} 
+      documents={documents}
       onAddPatient={onAddPatient} 
       onDeletePatient={onDeletePatient} 
       onUpdatePatient={onUpdatePatient}
+      onAddDocument={onAddDocument}
       onTabChange={onTabChange}
     />
   );
@@ -50,9 +60,11 @@ function PatientListContent({
   appointments, 
   treatments, 
   dentists, 
+  documents,
   onAddPatient, 
   onDeletePatient, 
   onUpdatePatient,
+  onAddDocument,
   onTabChange
 }: PatientListProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -73,6 +85,43 @@ function PatientListContent({
   const [isSuccessModalOpen, setIsSuccessModalOpen] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [viewingDependentsOf, setViewingDependentsOf] = useState<Patient | null>(null);
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [uploadForm, setUploadForm] = useState<{ name: string; type: PatientDocument['type']; file: File | null }>({
+    name: '',
+    type: 'Documento',
+    file: null,
+  });
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleUpload = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedPatientDetails || !uploadForm.file) {
+      return;
+    }
+
+    if (!DOCUMENT_ALLOWED_TYPES.includes(uploadForm.file.type)) {
+      setErrors({ upload: 'Tipo de arquivo inválido. Apenas PDF é permitido.' });
+      return;
+    }
+
+    if (uploadForm.file.size > DOCUMENT_MAX_BYTES) {
+      setErrors({ upload: `Arquivo muito grande. Limite: ${DOCUMENT_MAX_MB}MB.` });
+      return;
+    }
+
+    const fileUrl = URL.createObjectURL(uploadForm.file);
+
+    onAddDocument({
+      patientId: selectedPatientDetails.id,
+      name: uploadForm.name || uploadForm.file.name,
+      type: uploadForm.type,
+      url: fileUrl,
+    });
+
+    setIsUploadModalOpen(false);
+    setUploadForm({ name: '', type: 'Documento', file: null });
+    setErrors({});
+  };
 
   const handleBackFromPatients = () => {
     onTabChange?.('dashboard');
@@ -706,6 +755,47 @@ function PatientListContent({
           </div>
         </div>
       </Modal>
+
+      <Modal
+        isOpen={isUploadModalOpen}
+        onClose={() => { setIsUploadModalOpen(false); setErrors({}); }}
+        title="Upload de Documento"
+      >
+        <form onSubmit={handleUpload} className="space-y-4">
+          <Input label="Nome do Documento" required value={uploadForm.name} onChange={e => setUploadForm({ ...uploadForm, name: e.target.value })} />
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium text-zinc-700">Tipo</label>
+            <select
+              className="flex h-11 sm:h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+              value={uploadForm.type}
+              onChange={e => setUploadForm({ ...uploadForm, type: e.target.value as PatientDocument['type'] })}
+            >
+              <option value="Exame">Exame</option>
+              <option value="Documento">Documento</option>
+              <option value="Raio-X">Raio-X</option>
+            </select>
+          </div>
+          <div className="border-2 border-dashed border-zinc-200 rounded-xl p-8 text-center bg-zinc-50 cursor-pointer hover:bg-zinc-100 transition-colors" onClick={() => fileInputRef.current?.click()}>
+            <input
+              type="file"
+              ref={fileInputRef}
+              className="hidden"
+              accept="application/pdf"
+              onChange={e => setUploadForm({ ...uploadForm, file: e.target.files?.[0] || null })}
+            />
+            <Upload className="h-8 w-8 text-zinc-400 mx-auto mb-2" />
+            <p className="text-sm font-medium text-zinc-700">
+              {uploadForm.file ? uploadForm.file.name : 'Clique ou arraste o arquivo aqui'}
+            </p>
+            <p className="text-xs text-zinc-400 mt-1">Apenas PDF, até {DOCUMENT_MAX_MB}MB</p>
+          </div>
+          {errors.upload && <p className="text-xs text-red-500">{errors.upload}</p>}
+          <div className="flex flex-col sm:flex-row justify-end gap-3 pt-2">
+            <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={() => { setIsUploadModalOpen(false); setErrors({}); }}>Cancelar</Button>
+            <Button type="submit" className="w-full sm:w-auto">Salvar Documento</Button>
+          </div>
+        </form>
+      </Modal>
     </>
   );
 
@@ -766,6 +856,10 @@ function PatientListContent({
               <Button variant="outline" size="sm" className="gap-2 text-emerald-600 border-emerald-100 flex-1 sm:flex-none justify-center" onClick={() => handleGeneratePassword(selectedPatientDetails)}>
                 <Award className="h-4 w-4" /> 
                 <span className="whitespace-nowrap">Nova Senha</span>
+              </Button>
+              <Button variant="outline" size="sm" className="gap-2 text-emerald-600 border-emerald-100 flex-1 sm:flex-none justify-center" onClick={() => setIsUploadModalOpen(true)}>
+                <FileUp className="h-4 w-4" /> 
+                <span className="whitespace-nowrap">Upload Documento</span>
               </Button>
             </div>
           </div>
@@ -833,6 +927,38 @@ function PatientListContent({
                 ))}
                 {patientAppointments.filter(a => a.status !== 'completed' && a.status !== 'cancelled').length === 0 && (
                   <p className="text-sm text-zinc-400 italic text-center py-4">Nenhum agendamento futuro.</p>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border-none shadow-sm">
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <FileText className="h-5 w-5 text-emerald-500" />
+                  Documentos
+                </CardTitle>
+                <Button variant="outline" size="sm" className="gap-2" onClick={() => setIsUploadModalOpen(true)}>
+                  <FileUp className="h-4 w-4" /> Upload
+                </Button>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {documents.filter(d => d.patientId === selectedPatientDetails.id).map(docItem => (
+                  <a
+                    key={docItem.id}
+                    href={docItem.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-3 p-3 rounded-lg border border-zinc-100 bg-zinc-50/50 hover:bg-zinc-100 transition-colors"
+                  >
+                    <FileText className="h-4 w-4 text-emerald-500 shrink-0" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-zinc-900 truncate">{docItem.name}</p>
+                      <p className="text-xs text-zinc-500">{docItem.type}</p>
+                    </div>
+                  </a>
+                ))}
+                {documents.filter(d => d.patientId === selectedPatientDetails.id).length === 0 && (
+                  <p className="text-sm text-zinc-400 italic text-center py-4">Nenhum documento anexado.</p>
                 )}
               </CardContent>
             </Card>

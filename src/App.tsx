@@ -1130,7 +1130,11 @@ export default function App() {
   };
 
   const updateAttendant = async (updated: Attendant) => {
+    const previousEmail = String(attendants.find(a => a.id === updated.id)?.email || '').trim().toLowerCase();
+    const nextEmail = String(updated.email || '').trim().toLowerCase();
+    const emailChanged = previousEmail !== '' && nextEmail !== '' && previousEmail !== nextEmail;
     try {
+      const rawPassword = (updated as any).password as string | undefined;
       const safeUpdated = stripPassword(updated as any);
       await setDoc(doc(db, 'attendants', updated.id), safeUpdated, { merge: true });
       await setDoc(doc(db, 'attendants', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
@@ -1143,13 +1147,37 @@ export default function App() {
         phone: updated.phone
       }, { merge: true });
       await setDoc(userRef, { password: deleteField() }, { merge: true }).catch(() => {});
-      if ((updated as any).password && updated.email) {
-        await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
+      if (rawPassword && rawPassword.length >= 6) {
+        const response = await fetch(`${API_BASE}/api/admin/set-password`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid: updated.id, newPassword: rawPassword }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(result?.error || 'Falha ao sincronizar a senha com a autenticação.');
+        }
+      }
+      if (emailChanged) {
+        const response = await fetch(`${API_BASE}/api/update-user-email`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ uid: updated.id, newEmail: nextEmail }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          await setDoc(userRef, { email: previousEmail }, { merge: true }).catch(() => {});
+          await setDoc(doc(db, 'attendants', updated.id), { email: previousEmail }, { merge: true }).catch(() => {});
+          throw new Error(result?.error || 'Falha ao sincronizar o e-mail com a autenticação.');
+        }
       }
       
       logAction('Edição', 'attendant', updated.id, `Atendente ${updated.name} atualizado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `attendants/${updated.id}`);
+      if (emailChanged) {
+        alert(error instanceof Error ? error.message : 'Falha ao sincronizar o e-mail com a autenticação. O e-mail anterior foi mantido.');
+      }
     }
   };
 
@@ -1995,9 +2023,11 @@ export default function App() {
                   appointments={appointments}
                   treatments={treatments}
                   dentists={dentists}
+                  documents={documents}
                   onAddPatient={addPatient}
                   onDeletePatient={deletePatient}
                   onUpdatePatient={updatePatient}
+                  onAddDocument={addDocument}
                   onTabChange={setActiveTab}
                 />
               )}
