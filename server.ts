@@ -14,6 +14,11 @@ const admin: any = (adminModule as any)?.default || adminModule;
 import { google } from "googleapis";
 
 dotenv.config();
+// Overrides locais (gitignored) têm prioridade sobre o .env de produção versionado.
+const envLocalPath = path.join(process.cwd(), '.env.local');
+if (fs.existsSync(envLocalPath)) {
+  dotenv.config({ path: envLocalPath, override: true });
+}
 
 // Lê configurações do Firebase client config para reutilizar projectId e databaseId no Admin SDK
 let firebaseClientConfig: any = {};
@@ -726,6 +731,78 @@ app.post('/api/reset-password/complete', async (req, res) => {
     console.error('/api/reset-password/complete error:', err);
     appendDebugLog(`/api/reset-password/complete error: ${err instanceof Error ? err.message : String(err)}`);
     return res.status(500).json({ error: 'Erro ao redefinir a senha.', details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Sincroniza troca de e-mail com o Firebase Auth (evita desalinhamento com o Firestore que gera auth/invalid-credential no login).
+app.post('/api/update-user-email', async (req, res) => {
+  const uid = String(req.body?.uid || '').trim();
+  const newEmail = String(req.body?.newEmail || '').trim().toLowerCase();
+
+  if (!uid || !newEmail) {
+    return res.status(400).json({ error: 'uid e newEmail são obrigatórios' });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail)) {
+    return res.status(400).json({ error: 'E-mail inválido.' });
+  }
+
+  try {
+    if (!db || typeof db.collection !== 'function') {
+      throw new Error('Firestore indisponível no servidor.');
+    }
+
+    const userRef = db.collection('users').doc(uid);
+    const userSnap = await userRef.get();
+    if (!userSnap.exists) {
+      return res.status(404).json({ error: 'Usuário não encontrado.' });
+    }
+    const userData = userSnap.data() || {};
+
+    let authUpdated = false;
+    let resolvedAuthUid = String(userData.authUid || uid);
+    const authUidCandidates = uniqueNonEmptyStrings([userData.authUid, uid]);
+    for (const authUid of authUidCandidates) {
+      try {
+        await admin.auth().updateUser(authUid, { email: newEmail });
+        authUpdated = true;
+        resolvedAuthUid = authUid;
+        break;
+      } catch (authErr: any) {
+        if (authErr?.code === 'auth/user-not-found') {
+          continue;
+        }
+        throw authErr;
+      }
+    }
+
+    // Sem authUid conhecido no Auth: tenta localizar a conta pelo e-mail antigo antes de desistir da sincronização.
+    if (!authUpdated) {
+      const oldEmail = String(userData.email || '').trim().toLowerCase();
+      if (oldEmail && oldEmail !== newEmail) {
+        try {
+          const existingAuthUser = await admin.auth().getUserByEmail(oldEmail);
+          await admin.auth().updateUser(existingAuthUser.uid, { email: newEmail });
+          resolvedAuthUid = existingAuthUser.uid;
+          authUpdated = true;
+        } catch (lookupErr: any) {
+          if (lookupErr?.code !== 'auth/user-not-found') {
+            throw lookupErr;
+          }
+          // Sem conta no Firebase Auth ainda (login legado) — segue só com Firestore.
+        }
+      }
+    }
+
+    await userRef.set({ email: newEmail, ...(authUpdated ? { authUid: resolvedAuthUid } : {}) }, { merge: true });
+
+    return res.json({ status: 'ok', authSynced: authUpdated });
+  } catch (err: any) {
+    console.error('/api/update-user-email error:', err);
+    appendDebugLog(`/api/update-user-email error: ${err instanceof Error ? err.message : String(err)}`);
+    if (err?.code === 'auth/email-already-exists') {
+      return res.status(409).json({ error: 'Este e-mail já está em uso por outra conta no Firebase Auth.' });
+    }
+    return res.status(500).json({ error: 'Erro ao atualizar o e-mail.', details: err instanceof Error ? err.message : String(err) });
   }
 });
 

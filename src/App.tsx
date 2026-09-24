@@ -556,7 +556,11 @@ export default function App() {
     if (user && user.id === updated.id) {
       setUser(updated);
     }
-    
+
+    const previousEmail = String(users.find(u => u.id === updated.id)?.email || '').trim().toLowerCase();
+    const nextEmail = String(updated.email || '').trim().toLowerCase();
+    const emailChanged = previousEmail !== '' && nextEmail !== '' && previousEmail !== nextEmail;
+
     // Atualização no Firebase Firestore
     try {
       await runWithLoading(async () => {
@@ -568,6 +572,21 @@ export default function App() {
 
         if ((updated as any).password && updated.email) {
           await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
+        }
+
+        // Sincroniza a troca de e-mail com o Firebase Auth; sem isso o login com o novo e-mail falha (auth/invalid-credential).
+        if (emailChanged) {
+          const response = await fetch(`${API_BASE}/api/update-user-email`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uid: updated.id, newEmail: nextEmail }),
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            // Reverte o e-mail no Firestore para não deixar Auth e Firestore dessincronizados.
+            await setDoc(userRef, { email: previousEmail }, { merge: true }).catch(() => {});
+            throw new Error(result?.error || 'Falha ao sincronizar o e-mail com a autenticação.');
+          }
         }
 
         // If user is a dentist, update the dentist record too
@@ -595,6 +614,9 @@ export default function App() {
       logAction('Edição', 'system', updated.id, `Usuário ${updated.name} atualizado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `users/${updated.id}`);
+      if (emailChanged) {
+        alert(error instanceof Error ? error.message : 'Falha ao sincronizar o e-mail com a autenticação. O e-mail anterior foi mantido.');
+      }
     }
   };
 
