@@ -670,10 +670,14 @@ app.post('/api/reset-password/complete', async (req, res) => {
       return res.status(400).json({ error: 'Token expirado.' });
     }
 
+    let authUpdated = false;
+    let resolvedAuthUid = String(userData.authUid || uid);
     const authUidCandidates = uniqueNonEmptyStrings([userData.authUid, uid]);
     for (const authUid of authUidCandidates) {
       try {
         await admin.auth().updateUser(authUid, { password: newPassword });
+        authUpdated = true;
+        resolvedAuthUid = authUid;
         break;
       } catch (authErr: any) {
         if (authErr?.code === 'auth/user-not-found') {
@@ -683,10 +687,34 @@ app.post('/api/reset-password/complete', async (req, res) => {
       }
     }
 
+    // Nenhum authUid candidato existia no Firebase Auth: localiza (ou cria) a conta pelo e-mail
+    // para evitar que a senha fique divergente entre Firestore e Firebase Auth (auth/invalid-credential no login).
+    if (!authUpdated) {
+      const emailForAuth = String(userData.email || '').trim().toLowerCase();
+      if (!emailForAuth) {
+        return res.status(500).json({ error: 'Não foi possível localizar a conta de autenticação para redefinir a senha.' });
+      }
+      try {
+        const existingAuthUser = await admin.auth().getUserByEmail(emailForAuth);
+        await admin.auth().updateUser(existingAuthUser.uid, { password: newPassword });
+        resolvedAuthUid = existingAuthUser.uid;
+        authUpdated = true;
+      } catch (lookupErr: any) {
+        if (lookupErr?.code === 'auth/user-not-found') {
+          const createdAuthUser = await admin.auth().createUser({ email: emailForAuth, password: newPassword });
+          resolvedAuthUid = createdAuthUser.uid;
+          authUpdated = true;
+        } else {
+          throw lookupErr;
+        }
+      }
+    }
+
     await userRef.set({
       password: newPassword,
       passwordResetToken: '',
       passwordResetExpires: null,
+      authUid: resolvedAuthUid,
     }, { merge: true });
 
     await updatePasswordMirrorIfExists('patients', uid, newPassword);
