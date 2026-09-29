@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './Card';
 import { Input } from './Input';
 import { Modal } from './Modal';
 import { Dentist } from '../types';
-import { cn, maskPhone, maskCRO } from '../lib/utils';
+import { cn, maskPhone, maskCRO, maskCPF, validateCPF } from '../lib/utils';
 
 interface DentistListProps {
   dentists: Dentist[];
@@ -33,6 +33,7 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
     phone: '',
     specialty: '',
     cro: '',
+    cpf: '',
     password: '',
   });
 
@@ -53,6 +54,8 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
     
     if (formData.specialty.trim().length < 3) newErrors.specialty = 'Especialidade inválida';
     if (formData.cro.trim().length < 5) newErrors.cro = 'CRO inválido';
+    if (!formData.cpf.trim()) newErrors.cpf = 'CPF é obrigatório';
+    else if (!validateCPF(formData.cpf)) newErrors.cpf = 'CPF inválido';
     
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -62,14 +65,15 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
     e.preventDefault();
     if (!validate()) return;
 
+    const cpfDigits = formData.cpf.replace(/\D/g, '');
     if (editingDentist) {
-      onUpdateDentist({ ...editingDentist, ...formData });
+      onUpdateDentist({ ...editingDentist, ...formData, cpf: cpfDigits });
     } else {
-      onAddDentist(formData);
+      onAddDentist({ ...formData, cpf: cpfDigits });
     }
     setIsModalOpen(false);
     setEditingDentist(null);
-    setFormData({ name: '', email: '', phone: '', specialty: '', cro: '', password: '' });
+    setFormData({ name: '', email: '', phone: '', specialty: '', cro: '', cpf: '', password: '' });
     setErrors({});
   };
 
@@ -81,6 +85,7 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
       phone: dentist.phone,
       specialty: dentist.specialty,
       cro: dentist.cro,
+      cpf: maskCPF(dentist.cpf || ''),
       password: '',
     });
     setIsModalOpen(true);
@@ -156,7 +161,7 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
         onClose={() => {
           setIsModalOpen(false);
           setEditingDentist(null);
-          setFormData({ name: '', email: '', phone: '', specialty: '', cro: '' });
+          setFormData({ name: '', email: '', phone: '', specialty: '', cro: '', cpf: '', password: '' });
           setErrors({});
         }} 
         title={editingDentist ? "Editar Dentista" : "Novo Dentista"}
@@ -185,6 +190,18 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
               value={formData.phone}
               error={errors.phone}
               onChange={(e) => setFormData({ ...formData, phone: maskPhone(e.target.value) })}
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input 
+              label="CPF" 
+              type="text" 
+              required 
+              value={formData.cpf}
+              error={errors.cpf}
+              autoComplete="off"
+              onChange={(e) => setFormData({ ...formData, cpf: maskCPF(e.target.value) })}
+              placeholder="000.000.000-00"
             />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

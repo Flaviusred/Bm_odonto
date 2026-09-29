@@ -6,7 +6,9 @@ export const emailService = {
     try {
       await runWithLoading(async () => {
         const origin = typeof window !== 'undefined' ? window.location.origin : '';
-        const loginUrl = origin;
+        const basePathRaw = String((import.meta as any).env?.BASE_URL || '/');
+        const basePath = `/${basePathRaw.replace(/^\/+|\/+$/g, '')}/`.replace(/\/+/g, '/');
+        const loginUrl = origin ? `${origin.replace(/\/$/, '')}${basePath}` : basePath;
 
         // Enviar apenas o corpo: o servidor adicionará o cabeçalho (logo CID + texto Direitoria de Saúde / Bravo Odonto)
         const html = `

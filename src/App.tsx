@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import React from 'react';
 import { Sidebar } from './components/Sidebar';
+import * as XLSX from 'xlsx';
 import { Dashboard } from './components/Dashboard';
 import { PatientList } from './components/PatientList';
 import { AgendaView } from './components/AgendaView';
@@ -26,7 +27,8 @@ import { Button } from './components/Button';
 import { Modal } from './components/Modal';
 import { Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
 import { emailService } from './services/emailService';
-import { API_BASE, safeRandomUUID } from './lib/utils';
+import { API_BASE, safeRandomUUID, validateCPF } from './lib/utils';
+import { canAccessTab, getDefaultTabForUser, isDentistTab, isPatientTab } from './lib/permissions';
 import LoadingOverlay from './components/LoadingOverlay';
 import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
 import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField, orderBy, getDocs, writeBatch } from 'firebase/firestore';
@@ -44,10 +46,11 @@ enum OperationType {
 
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
   const message = error instanceof Error ? error.message : String(error);
-  // Erros de permissão são esperados para usuários sem acesso à coleção — apenas loga, não crasha.
+  // Em leituras/listagens, erro de permissão pode ser esperado para alguns perfis.
+  // Em escritas, precisamos tratar como erro real para não mascarar falhas de cadastro.
   const isPermissionError = message.includes('Missing or insufficient permissions') ||
     (error as any)?.code === 'permission-denied';
-  if (isPermissionError) {
+  if (isPermissionError && (operationType === OperationType.LIST || operationType === OperationType.GET)) {
     console.warn(`Firestore [${operationType}] at ${path}: sem permissão (ignorado para este perfil).`);
     return;
   }
@@ -92,6 +95,62 @@ function normalizeUsersCollection(rows: any[]): User[] {
   return result as User[];
 }
 
+const LEGACY_SESSION_FALLBACK_AUTH_CODES = new Set([
+  'auth/operation-not-allowed',
+  'auth/invalid-api-key',
+  'auth/network-request-failed',
+  'auth/internal-error',
+  'auth/too-many-requests',
+  'auth/configuration-not-found',
+  'auth/recaptcha-not-enabled',
+]);
+
+const isFetchUnavailableError = (error: unknown) => {
+  const msg = String((error as any)?.message || '').toLowerCase();
+  return msg.includes('failed to fetch') || msg.includes('networkerror') || msg.includes('fetch');
+};
+
+const isEmailAlreadyInUseAuthError = (error: unknown) => {
+  const code = String((error as any)?.code || '').toLowerCase();
+  const msg = String((error as any)?.message || '').toLowerCase();
+  return code === 'auth/email-already-in-use' || msg.includes('email-already-in-use');
+};
+
+const LOGIN_AUTH_ERROR_MESSAGES: Record<string, string> = {
+  'auth/invalid-credential': 'E-mail ou senha inválidos. Verifique os dados e tente novamente.',
+  'auth/wrong-password': 'Senha incorreta. Tente novamente.',
+  'auth/user-not-found': 'Não encontramos uma conta com este e-mail.',
+  'auth/invalid-email': 'O e-mail informado é inválido.',
+  'auth/too-many-requests': 'Muitas tentativas de login. Aguarde alguns minutos e tente novamente.',
+  'auth/network-request-failed': 'Falha de conexão. Verifique sua internet e tente novamente.',
+};
+
+const extractAuthErrorCode = (error: unknown) => {
+  const explicitCode = String((error as any)?.code || '').trim().toLowerCase();
+  if (explicitCode.startsWith('auth/')) {
+    return explicitCode;
+  }
+
+  const rawMessage = String((error as any)?.message || '');
+  const match = rawMessage.match(/auth\/[a-z-]+/i);
+  return match ? match[0].toLowerCase() : '';
+};
+
+const getFriendlyLoginErrorMessage = (error: unknown) => {
+  if (error instanceof Error && !String(error.message || '').includes('Firebase: Error')) {
+    return error.message;
+  }
+
+  const code = extractAuthErrorCode(error);
+  if (code && LOGIN_AUTH_ERROR_MESSAGES[code]) {
+    return LOGIN_AUTH_ERROR_MESSAGES[code];
+  }
+
+  return 'Não foi possível autenticar agora. Verifique e-mail/senha e tente novamente.';
+};
+
+const normalizeCpfValue = (value: unknown) => String(value || '').replace(/\D/g, '');
+
 export default function App() {
   const [globalLoading, setGlobalLoading] = useState(false);
 
@@ -113,12 +172,20 @@ export default function App() {
     const saved = sessionStorage.getItem('odonto_user');
     if (saved) {
       const u = JSON.parse(saved);
-      if (u.role === 'patient') return 'patient-profile';
-      if (u.role === 'dentist') return 'dentist-appointments';
-      return 'dashboard';
+      return getDefaultTabForUser(u);
     }
     return 'dashboard';
   });
+
+  type ExportPeriodKey = '7d' | '30d' | '90d' | 'year' | 'all';
+  const EXPORT_PERIOD_OPTIONS: Array<{ key: ExportPeriodKey; label: string }> = [
+    { key: '7d', label: '7 dias' },
+    { key: '30d', label: '30 dias' },
+    { key: '90d', label: '90 dias' },
+    { key: 'year', label: 'Este ano' },
+    { key: 'all', label: 'Todo período' },
+  ];
+  const [exportPeriod, setExportPeriod] = useState<ExportPeriodKey>('30d');
 
   const [patients, setPatients] = useState<Patient[]>([]);
   const [dentists, setDentists] = useState<Dentist[]>([]);
@@ -126,7 +193,6 @@ export default function App() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [treatments, setTreatments] = useState<Treatment[]>([]);
   const [documents, setDocuments] = useState<PatientDocument[]>([]);
-  const [patientLinkedIds, setPatientLinkedIds] = useState<string[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [schedules, setSchedules] = useState<DentistSchedule[]>([]);
@@ -229,7 +295,7 @@ export default function App() {
       }
     }
 
-    const item: NotificationItem = { id, ...notif, countedForBadge: counted, showAsToast: true };
+    const item: NotificationItem = { ...notif, id, countedForBadge: counted, showAsToast: true };
 
     // Suppress toast popups during the first app mount (login) for dentists — keep the badge count but avoid flooding the screen with toasts.
     if (initialMountRef.current && user?.role === 'dentist') {
@@ -351,16 +417,15 @@ export default function App() {
       subscribeUnion('appointments', setAppointments, appointmentQueries);
       subscribeUnion('treatments', setTreatments, [
         { key: 'byAuthUid', filters: [where('patientAuthUid', '==', firebaseAuthUid)] },
-        { key: 'byUserId', filters: [where('patientId', '==', user.id)] },
       ]);
       subscribeUnion('documents', setDocuments, [
         { key: 'byAuthUid', filters: [where('patientAuthUid', '==', firebaseAuthUid)] },
-        { key: 'byUserId', filters: [where('patientId', '==', user.id)] },
       ]);
       subscribeUnion('patients', setPatients, [
         { key: 'byAuthUid', filters: [where('authUid', '==', firebaseAuthUid)] },
         ...(normalizedEmail ? [{ key: 'byEmail', filters: [where('email', '==', normalizedEmail)] }] : []),
       ]);
+
       subscribeAll('announcements', setAnnouncements);
       subscribeAll('users', setUsers);
     } else {
@@ -395,65 +460,7 @@ export default function App() {
     return () => {
       unsubscribes.forEach(unsub => unsub());
     };
-  }, [db, firebaseAuthReady, firebaseAuthUid, user?.id]);
-
-  useEffect(() => {
-    if (!user || user.role !== 'patient') return;
-    const linked = new Set<string>();
-    if (user.id) linked.add(user.id);
-    patients.forEach((p: any) => {
-      if (p?.id) linked.add(p.id);
-    });
-    appointments.forEach((a: any) => {
-      if (a?.patientId) linked.add(a.patientId);
-    });
-    setPatientLinkedIds(Array.from(linked));
-  }, [user?.id, user?.role, patients, appointments]);
-
-  useEffect(() => {
-    if (!firebaseAuthReady || !firebaseAuthUid || !user || user.role !== 'patient') return;
-
-    const ids = patientLinkedIds.filter(Boolean);
-    if (ids.length === 0) return;
-
-    const unsubscribes: (() => void)[] = [];
-
-    const subscribeUnionByIds = (
-      name: string,
-      setter: (data: any[]) => void,
-      authUidField: 'patientAuthUid'
-    ) => {
-      const bucket = new Map<string, any[]>();
-      const flush = () => {
-        const merged = new Map<string, any>();
-        for (const rows of bucket.values()) {
-          rows.forEach((row) => merged.set(row.id, row));
-        }
-        setter(Array.from(merged.values()));
-      };
-
-      const qAuth = query(collection(db, name), where(authUidField, '==', firebaseAuthUid));
-      unsubscribes.push(onSnapshot(qAuth, (snap) => {
-        bucket.set('byAuthUid', snap.docs.map(d => ({ ...d.data(), id: d.id } as any)));
-        flush();
-      }, () => {}));
-
-      ids.forEach((id) => {
-        const qId = query(collection(db, name), where('patientId', '==', id));
-        unsubscribes.push(onSnapshot(qId, (snap) => {
-          bucket.set(`byPatientId:${id}`, snap.docs.map(d => ({ ...d.data(), id: d.id } as any)));
-          flush();
-        }, () => {}));
-      });
-    };
-
-    subscribeUnionByIds('treatments', setTreatments, 'patientAuthUid');
-    subscribeUnionByIds('documents', setDocuments, 'patientAuthUid');
-
-    return () => {
-      unsubscribes.forEach((u) => u());
-    };
-  }, [db, firebaseAuthReady, firebaseAuthUid, user?.id, user?.role, patientLinkedIds]);
+  }, [db, firebaseAuthReady, firebaseAuthUid, user?.id, user?.email]);
 
   const updateReminderSettings = async (newSettings: typeof reminderSettings) => {
     try {
@@ -470,6 +477,20 @@ export default function App() {
     return safe;
   };
 
+  const stripUndefinedDeep = (value: any): any => {
+    if (Array.isArray(value)) {
+      return value.map(stripUndefinedDeep);
+    }
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => [k, stripUndefinedDeep(v)])
+      );
+    }
+    return value;
+  };
+
   const clearLegacyPasswords = async (id: string) => {
     // updateDoc evita criar documentos vazios quando o doc não existe.
     await updateDoc(doc(db, 'users', id), { password: deleteField() }).catch(() => {});
@@ -484,55 +505,322 @@ export default function App() {
     else sessionStorage.removeItem('odonto_user');
   }, [user]);
 
+  useEffect(() => {
+    if (!user) return;
+    if (canAccessTab(user, activeTab)) return;
+    const fallbackTab = getDefaultTabForUser(user);
+    if (fallbackTab !== activeTab) {
+      setActiveTab(fallbackTab);
+    }
+  }, [activeTab, user]);
+
+  const createAuthUserFromAdmin = async (email: string, password: string) => {
+    try {
+      if ((import.meta as any).env?.DEV) {
+        throw new Error('AUTH_BACKEND_UNAVAILABLE');
+      }
+
+      const currentAuthUser = auth.currentUser;
+      if (!currentAuthUser) {
+        throw new Error('Sessao expirada. Faca login novamente para criar usuarios.');
+      }
+
+      const idToken = await currentAuthUser.getIdToken();
+      const response = await fetch(`${API_BASE}/api/admin/auth/create-user`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (response.ok) {
+        return String(payload.uid || '').trim();
+      }
+
+      // Conta ja existe no Firebase Auth: reaproveita UID para criar docs no Firestore.
+      if (response.status === 409 && payload?.uid) {
+        return String(payload.uid).trim();
+      }
+
+      // Em dev/local, o Admin SDK pode não ter credencial para Auth.
+      // Nesses casos, sinaliza indisponibilidade para usar fallback legado no Firestore.
+      if (response.status === 404 || response.status >= 500) {
+        throw new Error('AUTH_BACKEND_UNAVAILABLE');
+      }
+
+      if (response.status === 503 && String(payload?.error || '').includes('AUTH_BACKEND_UNAVAILABLE')) {
+        throw new Error('AUTH_BACKEND_UNAVAILABLE');
+      }
+
+      throw new Error(payload.error || 'Falha ao criar usuario no Firebase Auth.');
+    } catch (err: any) {
+      // Falhas de rede/local API indisponível: usa fallback legado no Firestore.
+      if (isFetchUnavailableError(err)) {
+        throw new Error('AUTH_BACKEND_UNAVAILABLE');
+      }
+      if (isEmailAlreadyInUseAuthError(err)) {
+        throw new Error('Este e-mail ja possui conta no Firebase Auth. Use outro e-mail ou recupere a senha da conta existente.');
+      }
+      throw err;
+    }
+  };
+
+  const ensureCurrentAdminRoleDoc = async () => {
+    const current = auth.currentUser;
+    if (!current) {
+      throw new Error('Sessao sem autenticacao Firebase. Faca logout e login novamente para criar usuarios.');
+    }
+
+    const canonicalRef = doc(db, 'users', current.uid);
+    const canonicalSnap = await getDoc(canonicalRef).catch(() => null as any);
+    const canonicalData = canonicalSnap && canonicalSnap.exists() ? (canonicalSnap.data() as any) : null;
+    const currentRole = String(canonicalData?.role || user?.role || '').trim();
+
+    if (currentRole && (currentRole === 'admin' || currentRole === 'attendant')) {
+      return;
+    }
+
+    const fallbackRole = (user?.role === 'admin' || user?.role === 'attendant') ? user.role : 'admin';
+    await setDoc(canonicalRef, {
+      authUid: current.uid,
+      email: (current.email || user?.email || '').toLowerCase(),
+      name: user?.name || current.displayName || 'Administrador',
+      role: fallbackRole,
+      permissions: user?.permissions || [],
+    }, { merge: true });
+  };
+
+  const createManagedUserFromServer = async (payload: {
+    name: string;
+    email: string;
+    cpf: string;
+    phone?: string;
+    password: string;
+    role: UserRole;
+    permissions: string[];
+  }) => {
+    const currentAuthUser = auth.currentUser;
+    if (!currentAuthUser) {
+      throw new Error('Sessao sem autenticacao Firebase. Faca logout e login novamente para criar usuarios.');
+    }
+
+    const idToken = await currentAuthUser.getIdToken();
+    const response = await fetch(`${API_BASE}/api/admin/users/create`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${idToken}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    // 404 significa que o servidor em produção ainda não tem esta rota (versão antiga).
+    // Trata como indisponível para acionar o fallback local.
+    if (response.status === 404) {
+      throw new Error('AUTH_BACKEND_UNAVAILABLE');
+    }
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const details = String(data.details || '').trim();
+      throw new Error(details ? `${data.error || 'Falha ao criar usuário no servidor.'} (${details})` : (data.error || 'Falha ao criar usuário no servidor.'));
+    }
+
+    return data;
+  };
+
+  const shouldUseClientUserFallback = (error: unknown) => {
+    const raw = error instanceof Error ? error.message : String(error || '');
+    const message = raw.toLowerCase();
+    return (
+      message.includes('auth_backend_unavailable') ||
+      message.includes('could not load the default credentials') ||
+      message.includes('default credentials')
+    );
+  };
+
+  const createManagedUserLocally = async (payload: {
+    name: string;
+    email: string;
+    cpf: string;
+    phone?: string;
+    password: string;
+    role: UserRole;
+    permissions: string[];
+  }, preknownAuthUid?: string) => {
+    let authUid = preknownAuthUid || '';
+    let legacyAuth = false;
+
+    if (!authUid) {
+      try {
+        authUid = await createAuthUserWithSecondaryApp(payload.email, payload.password);
+      } catch (err: any) {
+        // Qualquer falha no Firebase Auth client-side (reCAPTCHA, credenciais, email existente, etc.)
+        // resulta em modo legado: usuário criado apenas no Firestore, sem conta Auth.
+        console.warn('createAuthUserWithSecondaryApp falhou, usando modo legado:', err?.code || err?.message);
+        legacyAuth = true;
+      }
+    }
+
+    const generatedId = authUid || `legacy-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const userDoc: any = stripUndefinedDeep({
+      id: generatedId,
+      name: payload.name,
+      email: payload.email,
+      cpf: payload.cpf,
+      phone: payload.phone || '',
+      role: payload.role,
+      permissions: payload.permissions || [],
+      createdAt: new Date().toISOString(),
+      isActive: true,
+      authUid: authUid || undefined,
+      legacyAuth: !authUid || undefined,
+      password: !authUid ? payload.password : undefined,
+    });
+
+    await runWithLoading(async () => {
+      await setDoc(doc(db, 'users', generatedId), userDoc, { merge: true });
+
+      if (payload.role === 'attendant') {
+        await setDoc(doc(db, 'attendants', generatedId), stripUndefinedDeep({
+          id: generatedId,
+          name: payload.name,
+          email: payload.email,
+          phone: payload.phone || '',
+          createdAt: new Date().toISOString(),
+          isActive: true,
+          authUid: authUid || undefined,
+          legacyAuth: legacyAuth || undefined,
+          password: !authUid ? payload.password : undefined,
+        }), { merge: true });
+      }
+
+      if (payload.role === 'dentist') {
+        await setDoc(doc(db, 'dentists', generatedId), stripUndefinedDeep({
+          id: generatedId,
+          name: payload.name,
+          email: payload.email,
+          phone: payload.phone || '',
+          createdAt: new Date().toISOString(),
+          isActive: true,
+          authUid: authUid || undefined,
+          legacyAuth: legacyAuth || undefined,
+          password: !authUid ? payload.password : undefined,
+        }), { merge: true });
+      }
+    });
+
+    return {
+      user: {
+        id: generatedId,
+      },
+    };
+  };
+
   const addUser = async (data: Omit<User, 'id'>) => {
     const email = data.email.trim().toLowerCase();
     const password = (data as any).password as string | undefined;
+    const normalizedCpf = normalizeCpfValue((data as any).cpf);
+
+    if (!auth.currentUser) {
+      throw new Error('Sessao sem autenticacao Firebase. Faca logout e login novamente para criar usuarios.');
+    }
+
+    const existingUserByEmail = users.find((u) => String(u.email || '').trim().toLowerCase() === email);
+    if (existingUserByEmail) {
+      throw new Error(
+        `Ja existe um usuario com este e-mail (${existingUserByEmail.name} - ${existingUserByEmail.role}). ` +
+        'Altere o e-mail ou edite o usuario existente.'
+      );
+    }
+
+    if (!normalizedCpf) {
+      throw new Error('CPF é obrigatório para novos cadastros de usuários.');
+    }
+
+    if (!validateCPF(normalizedCpf)) {
+      throw new Error('CPF inválido. Verifique os dígitos informados.');
+    }
+
+    const existingUserByCpf = users.find((u) => normalizeCpfValue((u as any).cpf) === normalizedCpf);
+    if (existingUserByCpf) {
+      throw new Error(`CPF já cadastrado para ${existingUserByCpf.name}.`);
+    }
 
     if (!password || password.length < 6) {
       throw new Error('Senha deve ter pelo menos 6 caracteres para criar conta no Firebase Auth.');
     }
 
-    const authUid = await createAuthUserWithSecondaryApp(email, password);
-    const id = authUid;
-    const newUser: User & { authUid?: string } = {
-      ...(stripPassword(data as any) as Omit<User, 'id'>),
-      id,
+    await ensureCurrentAdminRoleDoc();
+
+    const payload = {
+      name: data.name,
       email,
-      authUid,
+      cpf: normalizedCpf,
+      phone: data.phone,
+      password,
+      role: data.role,
+      permissions: (data as any).permissions || [],
     };
+
+    let serverPayload: any;
+    try {
+      serverPayload = await createManagedUserFromServer(payload);
+    } catch (error) {
+      if (!shouldUseClientUserFallback(error)) {
+        throw error;
+      }
+      // Passo intermediário: tenta o endpoint legado /api/admin/auth/create-user (servidor de produção antigo)
+      // para criar o usuário no Firebase Auth via Admin SDK sem perder a autenticação do admin atual.
+      let preknownUid: string | undefined;
+      try {
+        preknownUid = await createAuthUserFromAdmin(payload.email, payload.password);
+      } catch (_authErr) {
+        // Endpoint também indisponível ou falhou — segue para fallback completo.
+      }
+      serverPayload = await createManagedUserLocally(payload, preknownUid);
+    }
+
+    const newUser: User = {
+      ...(stripPassword(data as any) as Omit<User, 'id'>),
+      id: String(serverPayload?.user?.id || ''),
+      email,
+      cpf: normalizedCpf,
+      role: data.role,
+      permissions: (data as any).permissions || [],
+      phone: data.phone || '',
+    };
+    if (!newUser.id) {
+      throw new Error('Servidor nao retornou id do usuario criado.');
+    }
     
     try {
-      await runWithLoading(async () => {
-        await setDoc(doc(db, 'users', id), newUser);
+      await runWithLoading(async () => Promise.resolve());
 
-        if (newUser.role === 'attendant') {
-          const newAttendant: Attendant = {
-            id: newUser.id,
-            name: newUser.name,
-            email: newUser.email,
-            phone: newUser.phone || '',
-            createdAt: new Date().toISOString(),
-            isActive: true,
-          };
-          await setDoc(doc(db, 'attendants', id), newAttendant);
-        } else if (newUser.role === 'dentist') {
-          const newDentist: Dentist = {
-            id: newUser.id,
-            name: newUser.name,
-            email: newUser.email,
-            phone: newUser.phone || '',
-            specialty: (data as any).specialty || 'Geral',
-            cro: (data as any).cro || '00000',
-            createdAt: new Date().toISOString(),
-            isActive: true,
-          };
-          await setDoc(doc(db, 'dentists', id), newDentist);
-        }
-      });
+      setUsers((prev) => normalizeUsersCollection([...(prev as any[]), newUser as any]));
+      if (newUser.role === 'attendant') {
+        const attendantLocal: Attendant = {
+          id: newUser.id,
+          name: newUser.name,
+          email: newUser.email,
+          phone: newUser.phone || '',
+          createdAt: new Date().toISOString(),
+          isActive: true,
+        };
+        setAttendants((prev) => {
+          if (prev.some((a) => a.id === attendantLocal.id)) return prev;
+          return [...prev, attendantLocal];
+        });
+      }
 
       logAction('Criação', 'system', newUser.id, `Usuário ${newUser.name} criado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'users');
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(message || 'Falha ao criar usuário no Firestore.');
     }
   };
 
@@ -546,6 +834,64 @@ export default function App() {
       logAction('Exclusão', 'system', id, `Usuário excluído.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, `users/${id}`);
+    }
+  };
+
+  const syncAuthPassword = async (userId: string, newPassword: string, email?: string, previousEmail?: string) => {
+    const trimmedPassword = String(newPassword || '').trim();
+    if (!trimmedPassword) return;
+
+    const currentAuthUser = auth.currentUser;
+    if (!currentAuthUser) {
+      throw new Error('Sessão expirada. Faça login novamente para atualizar a senha.');
+    }
+
+    const idToken = await currentAuthUser.getIdToken();
+    const response = await fetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/password`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({
+        newPassword: trimmedPassword,
+        email: email || '',
+        previousEmail: previousEmail || '',
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Falha ao atualizar senha no Firebase Auth.');
+    }
+  };
+
+  const syncAuthEmail = async (userId: string, newEmail: string, previousEmail?: string) => {
+    const normalizedNewEmail = String(newEmail || '').trim().toLowerCase();
+    const normalizedPreviousEmail = String(previousEmail || '').trim().toLowerCase();
+    if (!normalizedNewEmail || normalizedNewEmail === normalizedPreviousEmail) return;
+
+    const currentAuthUser = auth.currentUser;
+    if (!currentAuthUser) {
+      throw new Error('Sessão expirada. Faça login novamente para atualizar o e-mail.');
+    }
+
+    const idToken = await currentAuthUser.getIdToken();
+    const response = await fetch(`${API_BASE}/api/admin/users/${encodeURIComponent(userId)}/email`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({
+        newEmail: normalizedNewEmail,
+        previousEmail: normalizedPreviousEmail,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Falha ao atualizar e-mail no Firebase Auth.');
     }
   };
 
@@ -564,30 +910,30 @@ export default function App() {
     // Atualização no Firebase Firestore
     try {
       await runWithLoading(async () => {
+        const existingUser = users.find((u) => u.id === updated.id);
+        const normalizedUpdatedEmail = String(updated.email || '').trim().toLowerCase();
+        const normalizedExistingEmail = String(existingUser?.email || '').trim().toLowerCase();
+        const normalizedCurrentAuthEmail = String(auth.currentUser?.email || '').trim().toLowerCase();
+        const shouldSyncEmail =
+          normalizedUpdatedEmail !== ''
+          && (
+            normalizedExistingEmail !== normalizedUpdatedEmail
+            || normalizedCurrentAuthEmail !== '' && normalizedCurrentAuthEmail !== normalizedUpdatedEmail
+          );
+
+        if (shouldSyncEmail) {
+          await syncAuthEmail(updated.id, updated.email, existingUser?.email || auth.currentUser?.email || '');
+        }
+
+        if ((updated as any).password) {
+          await syncAuthPassword(updated.id, String((updated as any).password), updated.email, existingUser?.email);
+        }
+
         const userRef = doc(db, 'users', updated.id);
         const safeUpdated = stripPassword(updated as any);
         await setDoc(userRef, safeUpdated, { merge: true });
         await setDoc(userRef, { password: deleteField() }, { merge: true });
         console.log('Usuário atualizado no Firestore com sucesso');
-
-        if ((updated as any).password && updated.email) {
-          await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
-        }
-
-        // Sincroniza a troca de e-mail com o Firebase Auth; sem isso o login com o novo e-mail falha (auth/invalid-credential).
-        if (emailChanged) {
-          const response = await fetch(`${API_BASE}/api/update-user-email`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ uid: updated.id, newEmail: nextEmail }),
-          });
-          const result = await response.json().catch(() => ({}));
-          if (!response.ok) {
-            // Reverte o e-mail no Firestore para não deixar Auth e Firestore dessincronizados.
-            await setDoc(userRef, { email: previousEmail }, { merge: true }).catch(() => {});
-            throw new Error(result?.error || 'Falha ao sincronizar o e-mail com a autenticação.');
-          }
-        }
 
         // If user is a dentist, update the dentist record too
         if (updated.role === 'dentist') {
@@ -596,8 +942,8 @@ export default function App() {
             name: updated.name,
             email: updated.email,
             phone: updated.phone || '',
-            cro: (updated as any).cro,
-            specialty: (updated as any).specialty
+            cro: (updated as any).cro || '',
+            specialty: (updated as any).specialty || ''
           }, { merge: true });
           await setDoc(dentistRef, { password: deleteField() }, { merge: true }).catch(() => {});
         } else if (updated.role === 'attendant') {
@@ -623,6 +969,9 @@ export default function App() {
   const updateUserPermissions = async (id: string, role: UserRole, permissions: string[]) => {
     try {
       await updateDoc(doc(db, 'users', id), { role, permissions });
+      if (user?.id === id) {
+        setUser({ ...user, role, permissions });
+      }
       logAction('Edição', 'system', id, `Permissões do usuário atualizadas.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `users/${id}`);
@@ -710,17 +1059,9 @@ export default function App() {
     return null;
   };
 
-  const canFallbackToLegacySession = (error: any) => {
-    const code = String(error?.code || '');
-    return [
-      'auth/operation-not-allowed',
-      'auth/invalid-api-key',
-      'auth/network-request-failed',
-      'auth/internal-error',
-      'auth/too-many-requests',
-      'auth/configuration-not-found',
-      'auth/recaptcha-not-enabled'
-    ].includes(code);
+  const canFallbackToLegacySession = (error: unknown) => {
+    const code = String((error as any)?.code || '');
+    return LEGACY_SESSION_FALLBACK_AUTH_CODES.has(code);
   };
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -742,6 +1083,9 @@ export default function App() {
           const legacyUser = resolveLegacyUserByCredentials(email, password);
           if (!legacyUser) {
             throw authErr;
+          }
+          if (legacyUser.role === 'admin' || legacyUser.role === 'attendant') {
+            throw new Error('Login administrativo requer autenticacao Firebase. Verifique Email/Senha no Firebase Auth.');
           }
           legacySessionUser = legacyUser;
 
@@ -851,12 +1195,12 @@ export default function App() {
         setUser(appUser);
         setSessionExpired(false);
         sessionStorage.setItem('odonto_user', JSON.stringify(appUser));
-        setActiveTab(appUser.role === 'patient' ? 'patient-profile' : appUser.role === 'dentist' ? 'dentist-appointments' : 'dashboard');
+        setActiveTab(getDefaultTabForUser(appUser));
         logAction('Login', 'system', appUser.id, `Usuário ${appUser.name} entrou no sistema.`);
       });
     } catch (error) {
       console.error('Login error:', error);
-      setLoginError('Credenciais incorretas.');
+      setLoginError(getFriendlyLoginErrorMessage(error));
     }
   };
 
@@ -926,7 +1270,7 @@ export default function App() {
         createdPatientName = newPatient.name;
 
         // include authUid on patient document when available
-        const patientWithAuth: any = { ...newPatient, ...(authUid ? { authUid } : {}) };
+        const patientWithAuth: any = stripUndefinedDeep({ ...newPatient, ...(authUid ? { authUid } : {}) });
         await setDoc(doc(db, 'patients', effectiveId), patientWithAuth);
 
         // Only create a corresponding `users` document for titulars (not for dependents)
@@ -978,7 +1322,7 @@ export default function App() {
   const updatePatient = async (updated: Patient) => {
     try {
       await runWithLoading(async () => {
-        const safePatient = stripPassword(updated as any);
+        const safePatient = stripUndefinedDeep(stripPassword(updated as any));
         await setDoc(doc(db, 'patients', updated.id), safePatient, { merge: true });
         await setDoc(doc(db, 'patients', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
 
@@ -1024,6 +1368,7 @@ export default function App() {
         role: 'dentist',
         permissions: ['patients', 'appointments', 'treatments'],
         phone: newDentist.phone,
+        ...(newDentist.cpf ? { cpf: newDentist.cpf } : {}),
         ...(authUid ? { authUid } : {})
       };
       await setDoc(doc(db, 'users', id), newUser);
@@ -1057,6 +1402,11 @@ export default function App() {
 
   const updateDentist = async (updated: Dentist) => {
     try {
+      if ((updated as any).password) {
+        const existingDentist = dentists.find((d) => d.id === updated.id);
+        await syncAuthPassword(updated.id, String((updated as any).password), updated.email, existingDentist?.email);
+      }
+
       const safeUpdated = stripPassword(updated as any);
       await setDoc(doc(db, 'dentists', updated.id), safeUpdated, { merge: true });
       await setDoc(doc(db, 'dentists', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
@@ -1066,12 +1416,10 @@ export default function App() {
       await setDoc(userRef, {
         name: updated.name,
         email: updated.email,
-        phone: updated.phone
+        phone: updated.phone,
+        ...(updated.cpf ? { cpf: updated.cpf } : {})
       }, { merge: true });
       await setDoc(userRef, { password: deleteField() }, { merge: true }).catch(() => {});
-      if ((updated as any).password && updated.email) {
-        await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
-      }
       
       logAction('Edição', 'dentist', updated.id, `Dentista ${updated.name} atualizado.`);
     } catch (error) {
@@ -1134,7 +1482,15 @@ export default function App() {
     const nextEmail = String(updated.email || '').trim().toLowerCase();
     const emailChanged = previousEmail !== '' && nextEmail !== '' && previousEmail !== nextEmail;
     try {
-      const rawPassword = (updated as any).password as string | undefined;
+      const existingAttendant = attendants.find((a) => a.id === updated.id);
+      if ((updated as any).password) {
+        await syncAuthPassword(updated.id, String((updated as any).password), updated.email, existingAttendant?.email);
+      }
+
+      if (emailChanged) {
+        await syncAuthEmail(updated.id, nextEmail, previousEmail);
+      }
+
       const safeUpdated = stripPassword(updated as any);
       await setDoc(doc(db, 'attendants', updated.id), safeUpdated, { merge: true });
       await setDoc(doc(db, 'attendants', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
@@ -1147,30 +1503,6 @@ export default function App() {
         phone: updated.phone
       }, { merge: true });
       await setDoc(userRef, { password: deleteField() }, { merge: true }).catch(() => {});
-      if (rawPassword && rawPassword.length >= 6) {
-        const response = await fetch(`${API_BASE}/api/admin/set-password`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ uid: updated.id, newPassword: rawPassword }),
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(result?.error || 'Falha ao sincronizar a senha com a autenticação.');
-        }
-      }
-      if (emailChanged) {
-        const response = await fetch(`${API_BASE}/api/update-user-email`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ uid: updated.id, newEmail: nextEmail }),
-        });
-        const result = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          await setDoc(userRef, { email: previousEmail }, { merge: true }).catch(() => {});
-          await setDoc(doc(db, 'attendants', updated.id), { email: previousEmail }, { merge: true }).catch(() => {});
-          throw new Error(result?.error || 'Falha ao sincronizar o e-mail com a autenticação.');
-        }
-      }
       
       logAction('Edição', 'attendant', updated.id, `Atendente ${updated.name} atualizado.`);
     } catch (error) {
@@ -1607,6 +1939,15 @@ export default function App() {
     }
   };
 
+  const deleteInventoryItem = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'inventory', id));
+      logAction('Exclusão de Item', 'inventory', id, `Item de estoque ${id} excluído.`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `inventory/${id}`);
+    }
+  };
+
   const addMovement = async (movement: InventoryMovement) => {
     try {
       await setDoc(doc(db, 'movements', movement.id), movement);
@@ -1646,10 +1987,11 @@ export default function App() {
 
     try {
       await runWithLoading(async () => {
+        const currentAppUrl = `${window.location.origin}${window.location.pathname}`;
         const response = await fetch(`${API_BASE}/api/forgot-password`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, cpf, origin: window.location.origin }),
+          body: JSON.stringify({ email, cpf, origin: window.location.origin, resetLink: currentAppUrl }),
         });
 
         if (!response.ok) {
@@ -1806,13 +2148,20 @@ export default function App() {
 
   const isPatient = user.role === 'patient';
   const isDentist = user.role === 'dentist';
+  const shouldRenderPatientPortal = isPatient && isPatientTab(activeTab);
+  const shouldRenderDentistPortal = isDentist && isDentistTab(activeTab);
+  const normalizedUserEmail = String(user.email || '').trim().toLowerCase();
   const patientData = isPatient
     ? (
-      patients.find((p: any) =>
-        p.id === user.id
-        || ((p as any).authUid && (p as any).authUid === user.id)
-        || ((p as any).email && user.email && String((p as any).email).toLowerCase() === String(user.email).toLowerCase())
-      )
+      // Prefere o titular (sem dependentOf) para evitar resolver para um dependente com mesmo e-mail
+      (() => {
+        const candidates = patients.filter((p: any) =>
+          p.id === user.id
+          || ((p as any).authUid && firebaseAuthUid && (p as any).authUid === firebaseAuthUid)
+          || ((p as any).email && normalizedUserEmail !== '' && String((p as any).email || '').trim().toLowerCase() === normalizedUserEmail)
+        );
+        return candidates.find((p: any) => !(p as any).dependentOf) || candidates[0] || null;
+      })()
       || {
         id: user.id,
         name: user.name || 'Paciente',
@@ -1824,12 +2173,232 @@ export default function App() {
         createdAt: (user as any).createdAt || new Date().toISOString(),
         isActive: true,
         patientType: 'civil' as const,
-        authUid: user.id,
+        authUid: firebaseAuthUid || user.id,
       }
     )
     : null;
   const patientAppointments = isPatient ? appointments.filter(a => a.patientId === user.id) : [];
   const patientTreatments = isPatient ? treatments.filter(t => t.patientId === user.id) : [];
+
+  const getDashboardExportData = (period: 'ExportPeriodKey' | '7d' | '30d' | '90d' | 'year' | 'all' = 'all') => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const today = new Date();
+
+    // Calcula data de início do período
+    let periodStart: Date | null = null;
+    if (period !== 'all') {
+      if (period === 'year') {
+        periodStart = new Date(today.getFullYear(), 0, 1);
+      } else {
+        const dayMap: Record<string, number> = { '7d': 7, '30d': 30, '90d': 90 };
+        periodStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+        periodStart.setDate(periodStart.getDate() - dayMap[period] + 1);
+      }
+    }
+
+    const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+
+    const filteredAppointments = periodStart
+      ? appointments.filter((a) => {
+          const d = parseDate(a.date);
+          return d >= periodStart! && d <= endOfToday;
+        })
+      : appointments;
+
+    const attendedStatuses = new Set(['concluído', 'completed']);
+    const patientTypeLabels: Record<string, string> = {
+      cbmpb: 'CBMPB',
+      security: 'Segurança Pública',
+      civil: 'Civil',
+    };
+
+    const totalPatients = patients.length;
+    const appointmentsTodayCount = appointments.filter((a) => a.date === todayStr).length;
+    const treatmentsDone = treatments.length;
+    const activeDentists = dentists.length;
+
+    const statusCounts = filteredAppointments.reduce((acc, apt) => {
+      const status = String(apt.status || 'Desconhecido');
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const dentistCounts = filteredAppointments.reduce((acc, apt) => {
+      const dentistName = dentists.find((d) => d.id === apt.dentistId)?.name || 'Desconhecido';
+      acc[dentistName] = (acc[dentistName] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+
+    const patientTypeById = new Map(patients.map((p) => [p.id, p.patientType]));
+    const attendedByType = { cbmpb: 0, security: 0, civil: 0 };
+
+    filteredAppointments.forEach((apt) => {
+      const normalizedStatus = String(apt.status || '').toLowerCase();
+      if (!attendedStatuses.has(normalizedStatus)) return;
+      const patientType = patientTypeById.get(apt.patientId);
+      if (patientType && patientType in attendedByType) {
+        attendedByType[patientType as keyof typeof attendedByType] += 1;
+      }
+    });
+
+    const periodLabel = period === 'all' ? 'Todo período'
+      : period === 'year' ? 'Este ano'
+      : period === '7d' ? 'Últimos 7 dias'
+      : period === '30d' ? 'Últimos 30 dias'
+      : 'Últimos 90 dias';
+
+    return {
+      generatedAt: new Date(),
+      periodLabel,
+      totals: {
+        totalPatients,
+        appointmentsTodayCount,
+        treatmentsDone,
+        activeDentists,
+      },
+      statusCounts,
+      dentistCounts,
+      attendedByType: [
+        { type: patientTypeLabels.cbmpb, total: attendedByType.cbmpb },
+        { type: patientTypeLabels.security, total: attendedByType.security },
+        { type: patientTypeLabels.civil, total: attendedByType.civil },
+      ],
+    };
+  };
+
+  const downloadDashboardSpreadsheet = () => {
+    const data = getDashboardExportData(exportPeriod);
+    const stamp = data.generatedAt.toISOString().slice(0, 10);
+
+    const wb = XLSX.utils.book_new();
+
+    // Aba: Resumo Geral
+    const resumoWs = XLSX.utils.aoa_to_sheet([
+      ['Relatório', 'Dashboard'],
+      ['Período', data.periodLabel],
+      ['Gerado em', data.generatedAt.toLocaleString('pt-BR')],
+      [],
+      ['Indicador', 'Valor'],
+      ['Total Pacientes (geral)', data.totals.totalPatients],
+      ['Agendamentos Hoje', data.totals.appointmentsTodayCount],
+      ['Tratamentos Realizados (geral)', data.totals.treatmentsDone],
+      ['Dentistas Ativos', data.totals.activeDentists],
+    ]);
+    XLSX.utils.book_append_sheet(wb, resumoWs, 'Resumo Geral');
+
+    // Aba: Atendimentos por Tipo
+    const tipoRows: (string | number)[][] = [['Tipo de Usuário', 'Atendimentos Concluídos']];
+    data.attendedByType.forEach((entry) => tipoRows.push([entry.type, entry.total]));
+    const tipoWs = XLSX.utils.aoa_to_sheet(tipoRows);
+    XLSX.utils.book_append_sheet(wb, tipoWs, 'Por Tipo de Usuário');
+
+    // Aba: Agendamentos por Status
+    const statusRows: (string | number)[][] = [['Status', 'Quantidade']];
+    Object.entries(data.statusCounts).forEach(([s, c]) => statusRows.push([s, c]));
+    const statusWs = XLSX.utils.aoa_to_sheet(statusRows);
+    XLSX.utils.book_append_sheet(wb, statusWs, 'Por Status');
+
+    // Aba: Agendamentos por Dentista
+    const dentistRows: (string | number)[][] = [['Dentista', 'Agendamentos']];
+    Object.entries(data.dentistCounts).forEach(([d, c]) => dentistRows.push([d, c]));
+    const dentistWs = XLSX.utils.aoa_to_sheet(dentistRows);
+    XLSX.utils.book_append_sheet(wb, dentistWs, 'Por Dentista');
+
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `dashboard-relatorio-${stamp}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  };
+
+  const downloadDashboardPdf = () => {
+    const data = getDashboardExportData(exportPeriod);
+    const escapeHtml = (value: string | number) => String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+    const statusRows = Object.entries(data.statusCounts)
+      .map(([status, count]) => `<tr><td>${escapeHtml(status)}</td><td>${escapeHtml(count)}</td></tr>`)
+      .join('');
+    const dentistRows = Object.entries(data.dentistCounts)
+      .map(([dentist, count]) => `<tr><td>${escapeHtml(dentist)}</td><td>${escapeHtml(count)}</td></tr>`)
+      .join('');
+    const typeRows = data.attendedByType
+      .map((entry) => `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.total)}</td></tr>`)
+      .join('');
+
+    const popup = window.open('', '_blank', 'width=1000,height=720');
+    if (!popup) {
+      window.alert('Não foi possível abrir a janela de impressão. Desative o bloqueador de pop-up e tente novamente.');
+      return;
+    }
+
+    popup.document.write(`
+      <!DOCTYPE html>
+      <html lang="pt-BR">
+      <head>
+        <meta charset="UTF-8" />
+        <title>Relatório do Dashboard</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 24px; color: #111827; }
+          h1, h2 { margin: 0 0 12px; }
+          h1 { font-size: 22px; }
+          h2 { margin-top: 24px; font-size: 16px; }
+          p { margin: 0 0 8px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+          th, td { border: 1px solid #d1d5db; padding: 8px; text-align: left; font-size: 13px; }
+          th { background: #f3f4f6; }
+          .meta { color: #6b7280; font-size: 12px; margin-bottom: 12px; }
+          .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+          .box { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; }
+          .value { font-size: 20px; font-weight: bold; }
+        </style>
+      </head>
+      <body>
+        <h1>Relatório do Dashboard</h1>
+        <p class="meta">Período: ${escapeHtml(data.periodLabel)}</p>
+        <p class="meta">Gerado em: ${escapeHtml(data.generatedAt.toLocaleString('pt-BR'))}</p>
+
+        <h2>Resumo Geral</h2>
+        <div class="grid">
+          <div class="box"><div>Total Pacientes</div><div class="value">${escapeHtml(data.totals.totalPatients)}</div></div>
+          <div class="box"><div>Agendamentos Hoje</div><div class="value">${escapeHtml(data.totals.appointmentsTodayCount)}</div></div>
+          <div class="box"><div>Tratamentos Realizados</div><div class="value">${escapeHtml(data.totals.treatmentsDone)}</div></div>
+          <div class="box"><div>Dentistas Ativos</div><div class="value">${escapeHtml(data.totals.activeDentists)}</div></div>
+        </div>
+
+        <h2>Atendimentos por Tipo de Usuário</h2>
+        <table>
+          <thead><tr><th>Tipo</th><th>Quantidade</th></tr></thead>
+          <tbody>${typeRows}</tbody>
+        </table>
+
+        <h2>Agendamentos por Status</h2>
+        <table>
+          <thead><tr><th>Status</th><th>Quantidade</th></tr></thead>
+          <tbody>${statusRows}</tbody>
+        </table>
+
+        <h2>Agendamentos por Dentista</h2>
+        <table>
+          <thead><tr><th>Dentista</th><th>Quantidade</th></tr></thead>
+          <tbody>${dentistRows}</tbody>
+        </table>
+      </body>
+      </html>
+    `);
+    popup.document.close();
+    popup.focus();
+    popup.print();
+  };
 
   return (
     <div className="flex min-h-screen bg-zinc-50">
@@ -1838,7 +2407,7 @@ export default function App() {
         <ProfileEditModal 
           isOpen={isProfileEditOpen} 
           onClose={() => setIsProfileEditOpen(false)} 
-          user={user}
+          user={isPatient && patientData?.cpf && !user.cpf ? { ...user, cpf: patientData.cpf } : user}
           onUpdateUser={updateUser}
           onOpenPasswordChange={() => {
             setIsProfileEditOpen(false);
@@ -1894,8 +2463,15 @@ export default function App() {
       
       <main className="flex-1 lg:pl-0 pt-16 lg:pt-0">
         <AnnouncementBanner announcements={announcements} userRole={user.role} />
+        {user.role !== 'patient' && normalizeCpfValue((user as any).cpf).length !== 11 && (
+          <div className="mx-auto max-w-7xl px-4 pt-4 lg:px-8">
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              Seu cadastro está incompleto: informe seu CPF em &quot;Editar Perfil&quot; para facilitar a recuperação de senha e identificação no sistema.
+            </div>
+          </div>
+        )}
         <div className="max-w-7xl mx-auto">
-          {isPatient && patientData ? (
+          {shouldRenderPatientPortal && patientData ? (
             <PatientPortal 
               activeTab={activeTab}
               patient={patientData}
@@ -1957,7 +2533,7 @@ export default function App() {
                 }
               }}
             />
-          ) : isDentist ? (
+          ) : shouldRenderDentistPortal ? (
             <DentistPortal 
               activeTab={activeTab}
               onTabChange={setActiveTab}
@@ -2010,12 +2586,121 @@ export default function App() {
           ) : (
             <>
               {activeTab === 'dashboard' && (
-                <Dashboard 
-                  patients={patients} 
-                  appointments={appointments} 
+                <Dashboard
+                  patients={patients}
+                  appointments={appointments}
                   treatments={treatments}
                   dentists={dentists}
+                  view="overview"
                 />
+              )}
+              {activeTab === 'dashboard-period' && (
+                <Dashboard
+                  patients={patients}
+                  appointments={appointments}
+                  treatments={treatments}
+                  dentists={dentists}
+                  view="period"
+                />
+              )}
+              {activeTab === 'dashboard-by-type' && (
+                <Dashboard
+                  patients={patients}
+                  appointments={appointments}
+                  treatments={treatments}
+                  dentists={dentists}
+                  view="by-type"
+                />
+              )}
+              {activeTab === 'dashboard-by-dentist' && (
+                <Dashboard
+                  patients={patients}
+                  appointments={appointments}
+                  treatments={treatments}
+                  dentists={dentists}
+                  view="by-dentist"
+                />
+              )}
+              {activeTab === 'dashboard-by-status' && (
+                <Dashboard
+                  patients={patients}
+                  appointments={appointments}
+                  treatments={treatments}
+                  dentists={dentists}
+                  view="by-status"
+                />
+              )}
+              {activeTab === 'dashboard-export-sheet' && (
+                <div className="p-4 lg:p-8 space-y-6">
+                  <div>
+                    <h1 className="text-2xl font-bold text-zinc-900">Exportar Dashboard para Planilha</h1>
+                    <p className="text-zinc-500">Baixe os indicadores do dashboard em formato Excel (.xlsx) com abas separadas por categoria.</p>
+                  </div>
+                  <Card className="border-none shadow-sm">
+                    <CardContent className="p-6 space-y-5">
+                      <div>
+                        <p className="text-sm font-medium text-zinc-700 mb-3">Filtrar por período:</p>
+                        <div className="flex flex-wrap gap-2">
+                          {EXPORT_PERIOD_OPTIONS.map((opt) => (
+                            <button
+                              key={opt.key}
+                              type="button"
+                              onClick={() => setExportPeriod(opt.key)}
+                              className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors border ${
+                                exportPeriod === opt.key
+                                  ? 'bg-emerald-500 text-white border-emerald-500'
+                                  : 'bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50'
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <p className="text-sm text-zinc-600">
+                        O arquivo Excel inclui 4 abas: Resumo Geral, Atendimentos por Tipo de Usuário (CBMPB, Segurança Pública e Civil),
+                        Agendamentos por Status e por Dentista — filtrados pelo período selecionado.
+                      </p>
+                      <Button onClick={downloadDashboardSpreadsheet}>Baixar planilha (.xlsx)</Button>
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
+              {activeTab === 'dashboard-export-pdf' && (
+                <div className="p-4 lg:p-8 space-y-6">
+                  <div>
+                    <h1 className="text-2xl font-bold text-zinc-900">Exportar Dashboard para PDF</h1>
+                    <p className="text-zinc-500">Gere uma versão pronta para impressão/arquivo em PDF dos indicadores do dashboard.</p>
+                  </div>
+                  <Card className="border-none shadow-sm">
+                    <CardContent className="p-6 space-y-5">
+                      <div>
+                        <p className="text-sm font-medium text-zinc-700 mb-3">Filtrar por período:</p>
+                        <div className="flex flex-wrap gap-2">
+                          {EXPORT_PERIOD_OPTIONS.map((opt) => (
+                            <button
+                              key={opt.key}
+                              type="button"
+                              onClick={() => setExportPeriod(opt.key)}
+                              className={`rounded-full px-4 py-1.5 text-sm font-medium transition-colors border ${
+                                exportPeriod === opt.key
+                                  ? 'bg-emerald-500 text-white border-emerald-500'
+                                  : 'bg-white text-zinc-600 border-zinc-200 hover:bg-zinc-50'
+                              }`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <p className="text-sm text-zinc-600">
+                        Ao clicar, será aberta a visualização de impressão com todos os dados consolidados do período selecionado.
+                        Em seguida, escolha o destino PDF na janela de impressão do navegador.
+                      </p>
+                      <Button onClick={downloadDashboardPdf}>Gerar PDF</Button>
+                    </CardContent>
+                  </Card>
+                </div>
               )}
               {activeTab === 'patients' && (
                 <PatientList 
@@ -2060,6 +2745,7 @@ export default function App() {
                   movements={movements}
                   user={user}
                   onUpdateInventory={updateInventory}
+                  onDeleteInventoryItem={deleteInventoryItem}
                   onAddMovement={addMovement}
                 />
               )}

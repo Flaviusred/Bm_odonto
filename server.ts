@@ -20,6 +20,11 @@ if (fs.existsSync(envLocalPath)) {
   dotenv.config({ path: envLocalPath, override: true });
 }
 
+const localEnvPath = path.join(process.cwd(), '.env.local');
+if (fs.existsSync(localEnvPath)) {
+  dotenv.config({ path: localEnvPath, override: true });
+}
+
 // Lê configurações do Firebase client config para reutilizar projectId e databaseId no Admin SDK
 let firebaseClientConfig: any = {};
 try {
@@ -106,6 +111,30 @@ const requireAuth = async (req: any, res: any, next: any) => {
   }
 };
 
+const getRoleForFirebaseUid = async (firebaseUid: string): Promise<string | null> => {
+  if (!db || typeof db.collection !== 'function') return null;
+
+  try {
+    const directSnap = await db.collection('users').doc(firebaseUid).get();
+    if (directSnap.exists) {
+      const data = directSnap.data() || {};
+      return String((data as any).role || '').trim() || null;
+    }
+
+    const byAuthUidSnap = await db.collection('users').where('authUid', '==', firebaseUid).limit(1).get();
+    if (!byAuthUidSnap.empty) {
+      const doc = byAuthUidSnap.docs[0];
+      const data = doc.data() || {};
+      return String((data as any).role || '').trim() || null;
+    }
+
+    return null;
+  } catch (err) {
+    console.warn('getRoleForFirebaseUid warning:', err instanceof Error ? err.message : String(err));
+    return null;
+  }
+};
+
 // Simple file-based debug logger for email flows (helps capture logs when
 // server output isn't visible in the terminal session)
 const DEBUG_LOG_DIR = path.join(process.cwd(), 'tmp');
@@ -138,6 +167,17 @@ const monitorEvent = async (type: string, details: any) => {
 };
 
 app.use(express.json({ limit: '50mb' }));
+
+// Some reverse proxies may forward duplicated slashes (e.g. //api/...)
+// which prevents Express routes from matching. Normalize the URL path first.
+app.use((req: any, _res: any, next: any) => {
+  const [rawPath, ...rawQuery] = String(req.url || '/').split('?');
+  const normalizedPath = rawPath.replace(/\/+/g, '/');
+  if (normalizedPath !== rawPath) {
+    req.url = normalizedPath + (rawQuery.length ? `?${rawQuery.join('?')}` : '');
+  }
+  next();
+});
 
 // CORS: permite que o Firebase Hosting (ou qualquer origem configurada em CORS_ORIGINS)
 // acesse as rotas /api/**. Em desenvolvimento, libera localhost.
@@ -563,6 +603,400 @@ app.put("/api/users/:id", requireAuth, (req: any, res: any) => {
   res.json({ status: "ok", user: data.users[userIndex] });
 });
 
+app.post('/api/admin/users/:id/password', requireAuth, async (req: any, res: any) => {
+  const targetUserId = String(req.params?.id || '').trim();
+  const newPassword = String(req.body?.newPassword || '');
+  const targetEmail = String(req.body?.email || '').trim().toLowerCase();
+  const previousEmail = String(req.body?.previousEmail || '').trim().toLowerCase();
+  const requesterUid = String(req.firebaseUser?.uid || '').trim();
+
+  if (!targetUserId || !newPassword) {
+    return res.status(400).json({ error: 'id e newPassword são obrigatórios' });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: 'A senha deve ter pelo menos 6 caracteres.' });
+  }
+  if (!db || typeof db.collection !== 'function') {
+    return res.status(500).json({ error: 'Firestore indisponível no servidor.' });
+  }
+
+  try {
+    const requesterRole = await getRoleForFirebaseUid(requesterUid);
+    if (requesterRole !== 'admin') {
+      return res.status(403).json({ error: 'Apenas administradores podem alterar senha de outros usuários.' });
+    }
+
+    const targetUserRef = db.collection('users').doc(targetUserId);
+    const targetUserSnap = await targetUserRef.get();
+    const targetUserData = targetUserSnap.exists ? (targetUserSnap.data() || {}) : {};
+
+    const emailCandidates = uniqueNonEmptyStrings([
+      targetEmail,
+      previousEmail,
+      (targetUserData as any).email,
+    ].map((value) => String(value || '').trim().toLowerCase()));
+
+    const authUidCandidates = uniqueNonEmptyStrings([
+      (targetUserData as any).authUid,
+      targetUserId,
+      req.body?.authUid,
+    ]);
+
+    const collectCandidatesFromDoc = (snap: any) => {
+      if (!snap || !snap.exists) return;
+      const data = snap.data() || {};
+      authUidCandidates.push(String((data as any).authUid || ''));
+      emailCandidates.push(String((data as any).email || '').trim().toLowerCase());
+    };
+
+    const directCollections: Array<'users' | 'patients' | 'dentists' | 'attendants'> = ['users', 'patients', 'dentists', 'attendants'];
+    for (const collectionName of directCollections) {
+      const snap = await db.collection(collectionName).doc(targetUserId).get();
+      collectCandidatesFromDoc(snap);
+    }
+
+    const usersByAuthUidSnap = await db.collection('users').where('authUid', '==', targetUserId).limit(1).get();
+    usersByAuthUidSnap.forEach((item: any) => collectCandidatesFromDoc(item));
+
+    for (const candidateEmail of uniqueNonEmptyStrings(emailCandidates)) {
+      const collectionsByEmail: Array<'users' | 'patients' | 'dentists' | 'attendants'> = ['users', 'patients', 'dentists', 'attendants'];
+      for (const collectionName of collectionsByEmail) {
+        const snapByEmail = await db.collection(collectionName).where('email', '==', candidateEmail).limit(2).get();
+        snapByEmail.forEach((item: any) => collectCandidatesFromDoc(item));
+      }
+    }
+
+    for (const candidateEmail of uniqueNonEmptyStrings(emailCandidates)) {
+      try {
+        const byEmail = await admin.auth().getUserByEmail(candidateEmail);
+        if (byEmail?.uid) authUidCandidates.push(byEmail.uid);
+      } catch (e: any) {
+        if (e?.code !== 'auth/user-not-found') throw e;
+      }
+    }
+
+    let updatedAuthUid: string | null = null;
+    for (const authUid of uniqueNonEmptyStrings(authUidCandidates)) {
+      try {
+        await admin.auth().updateUser(authUid, { password: newPassword });
+        updatedAuthUid = authUid;
+        break;
+      } catch (authErr: any) {
+        if (authErr?.code === 'auth/user-not-found') continue;
+        throw authErr;
+      }
+    }
+
+    if (!updatedAuthUid) {
+      const createEmail = uniqueNonEmptyStrings(emailCandidates)[0];
+      if (!createEmail) {
+        return res.status(404).json({ error: 'Usuário de autenticação não encontrado para atualização de senha.' });
+      }
+
+      try {
+        const created = await admin.auth().createUser({
+          email: createEmail,
+          password: newPassword,
+        });
+        updatedAuthUid = created.uid;
+      } catch (createErr: any) {
+        if (createErr?.code === 'auth/email-already-exists') {
+          const existing = await admin.auth().getUserByEmail(createEmail);
+          await admin.auth().updateUser(existing.uid, { password: newPassword });
+          updatedAuthUid = existing.uid;
+        } else {
+          throw createErr;
+        }
+      }
+    }
+
+    await targetUserRef.set({
+      authUid: updatedAuthUid,
+      password: newPassword,
+      passwordResetToken: '',
+      passwordResetExpires: null,
+    }, { merge: true });
+
+    await updatePasswordMirrorIfExists('patients', targetUserId, newPassword);
+    await updatePasswordMirrorIfExists('dentists', targetUserId, newPassword);
+    await updatePasswordMirrorIfExists('attendants', targetUserId, newPassword);
+
+    return res.json({ status: 'ok' });
+  } catch (err) {
+    console.error('/api/admin/users/:id/password error:', err);
+    return res.status(500).json({ error: 'Falha ao atualizar senha no Auth.', details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/admin/users/:id/email', requireAuth, async (req: any, res: any) => {
+  const targetUserId = String(req.params?.id || '').trim();
+  const newEmail = String(req.body?.newEmail || '').trim().toLowerCase();
+  const previousEmail = String(req.body?.previousEmail || '').trim().toLowerCase();
+  const requesterUid = String(req.firebaseUser?.uid || '').trim();
+
+  if (!targetUserId || !newEmail) {
+    return res.status(400).json({ error: 'id e newEmail são obrigatórios' });
+  }
+  if (!db || typeof db.collection !== 'function') {
+    return res.status(500).json({ error: 'Firestore indisponível no servidor.' });
+  }
+
+  try {
+    const requesterRole = await getRoleForFirebaseUid(requesterUid);
+
+    const targetUserRef = db.collection('users').doc(targetUserId);
+    const targetUserSnap = await targetUserRef.get();
+    const targetUserData = targetUserSnap.exists ? (targetUserSnap.data() || {}) : {};
+
+    const emailCandidates = uniqueNonEmptyStrings([
+      newEmail,
+      previousEmail,
+      (targetUserData as any).email,
+    ].map((value) => String(value || '').trim().toLowerCase()));
+
+    const authUidCandidates = uniqueNonEmptyStrings([
+      (targetUserData as any).authUid,
+      targetUserId,
+      req.body?.authUid,
+    ]);
+
+    const collectCandidatesFromDoc = (snap: any) => {
+      if (!snap || !snap.exists) return;
+      const data = snap.data() || {};
+      authUidCandidates.push(String((data as any).authUid || ''));
+      emailCandidates.push(String((data as any).email || '').trim().toLowerCase());
+    };
+
+    const directCollections: Array<'users' | 'patients' | 'dentists' | 'attendants'> = ['users', 'patients', 'dentists', 'attendants'];
+    for (const collectionName of directCollections) {
+      const snap = await db.collection(collectionName).doc(targetUserId).get();
+      collectCandidatesFromDoc(snap);
+    }
+
+    const usersByAuthUidSnap = await db.collection('users').where('authUid', '==', targetUserId).limit(1).get();
+    usersByAuthUidSnap.forEach((item: any) => collectCandidatesFromDoc(item));
+
+    for (const candidateEmail of uniqueNonEmptyStrings(emailCandidates)) {
+      const collectionsByEmail: Array<'users' | 'patients' | 'dentists' | 'attendants'> = ['users', 'patients', 'dentists', 'attendants'];
+      for (const collectionName of collectionsByEmail) {
+        const snapByEmail = await db.collection(collectionName).where('email', '==', candidateEmail).limit(2).get();
+        snapByEmail.forEach((item: any) => collectCandidatesFromDoc(item));
+      }
+    }
+
+    for (const candidateEmail of uniqueNonEmptyStrings(emailCandidates)) {
+      try {
+        const byEmail = await admin.auth().getUserByEmail(candidateEmail);
+        if (byEmail?.uid) authUidCandidates.push(byEmail.uid);
+      } catch (e: any) {
+        if (e?.code !== 'auth/user-not-found') throw e;
+      }
+    }
+
+    let targetAuthUid: string | null = null;
+    for (const authUid of uniqueNonEmptyStrings(authUidCandidates)) {
+      try {
+        await admin.auth().getUser(authUid);
+        targetAuthUid = authUid;
+        break;
+      } catch (authErr: any) {
+        if (authErr?.code === 'auth/user-not-found') continue;
+        throw authErr;
+      }
+    }
+
+    if (!targetAuthUid) {
+      return res.status(404).json({ error: 'Usuário de autenticação não encontrado para atualização de e-mail.' });
+    }
+
+    const canManage = requesterRole === 'admin' || requesterUid === targetAuthUid;
+    if (!canManage) {
+      return res.status(403).json({ error: 'Sem permissão para atualizar este e-mail.' });
+    }
+
+    try {
+      await admin.auth().updateUser(targetAuthUid, { email: newEmail });
+    } catch (authErr: any) {
+      if (authErr?.code === 'auth/email-already-exists') {
+        return res.status(409).json({ error: 'Já existe uma conta de autenticação com este e-mail.' });
+      }
+      throw authErr;
+    }
+
+    await targetUserRef.set({ email: newEmail, authUid: targetAuthUid }, { merge: true });
+
+    const mirrorCollections: Array<'patients' | 'dentists' | 'attendants'> = ['patients', 'dentists', 'attendants'];
+    for (const collectionName of mirrorCollections) {
+      const mirrorRef = db.collection(collectionName).doc(targetUserId);
+      const mirrorSnap = await mirrorRef.get();
+      if (mirrorSnap.exists) {
+        await mirrorRef.set({ email: newEmail, authUid: targetAuthUid }, { merge: true });
+      }
+    }
+
+    return res.json({ status: 'ok', authUid: targetAuthUid });
+  } catch (err) {
+    console.error('/api/admin/users/:id/email error:', err);
+    return res.status(500).json({ error: 'Falha ao atualizar e-mail no Auth.', details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/admin/auth/create-user', requireAuth, async (req: any, res: any) => {
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const password = String(req.body?.password || '');
+  const requesterUid = String(req.firebaseUser?.uid || '').trim();
+
+  if (!email || !password) {
+    return res.status(400).json({ error: 'email e password são obrigatórios' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'A senha deve ter pelo menos 6 caracteres.' });
+  }
+
+  try {
+    const requesterRole = await getRoleForFirebaseUid(requesterUid);
+    if (!requesterRole) {
+      return res.status(503).json({ error: 'AUTH_BACKEND_UNAVAILABLE', details: 'Nao foi possivel validar permissao admin no ambiente atual.' });
+    }
+    if (requesterRole !== 'admin') {
+      return res.status(403).json({ error: 'Apenas administradores podem criar usuários.' });
+    }
+
+    try {
+      const existing = await admin.auth().getUserByEmail(email);
+      return res.status(409).json({ error: 'Ja existe uma conta de autenticacao com este e-mail.', code: 'auth/email-already-exists', uid: existing.uid });
+    } catch (existingErr: any) {
+      if (existingErr?.code !== 'auth/user-not-found') throw existingErr;
+    }
+
+    const created = await admin.auth().createUser({ email, password });
+    return res.json({ status: 'ok', uid: created.uid });
+  } catch (err) {
+    console.error('/api/admin/auth/create-user error:', err);
+    return res.status(500).json({ error: 'Falha ao criar usuário no Auth.', details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post('/api/admin/users/create', requireAuth, async (req: any, res: any) => {
+  const requesterUid = String(req.firebaseUser?.uid || '').trim();
+  const requesterEmail = String(req.firebaseUser?.email || '').trim().toLowerCase();
+  const bootstrapAdminEmail = String(process.env.BOOTSTRAP_ADMIN_EMAIL || 'admin@odonto.com').trim().toLowerCase();
+
+  const name = String(req.body?.name || '').trim();
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  const cpf = normalizeCpf(req.body?.cpf);
+  const phone = String(req.body?.phone || '').trim();
+  const password = String(req.body?.password || '');
+  const role = String(req.body?.role || '').trim();
+  const permissions = Array.isArray(req.body?.permissions) ? req.body.permissions.filter((p: any) => typeof p === 'string') : [];
+  const specialty = String(req.body?.specialty || '').trim();
+  const cro = String(req.body?.cro || '').trim();
+
+  if (!db || typeof db.collection !== 'function') {
+    return res.status(503).json({ error: 'Firestore indisponível no servidor.' });
+  }
+  if (!name || !email || !password || !role || !cpf) {
+    return res.status(400).json({ error: 'name, email, cpf, password e role são obrigatórios.' });
+  }
+  if (cpf.length !== 11) {
+    return res.status(400).json({ error: 'CPF inválido. Informe os 11 dígitos.' });
+  }
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'A senha deve ter pelo menos 6 caracteres.' });
+  }
+  if (!['admin', 'attendant', 'dentist'].includes(role)) {
+    return res.status(400).json({ error: 'role inválido para criação administrativa.' });
+  }
+
+  try {
+    const requesterRole = await getRoleForFirebaseUid(requesterUid);
+    const canManageUsers = requesterRole === 'admin' || requesterRole === 'attendant' || (!!bootstrapAdminEmail && requesterEmail === bootstrapAdminEmail);
+    if (!canManageUsers) {
+      return res.status(403).json({ error: 'Sem permissão para criar usuários.' });
+    }
+
+    let authUid = '';
+    let usedLegacyAuthFallback = false;
+    const isAuthBackendUnavailable = (err: any) => {
+      const code = String(err?.code || '');
+      const msg = String(err?.message || '').toLowerCase();
+      return (
+        code === 'app/invalid-credential'
+        || code === 'app/no-app'
+        || msg.includes('could not load the default credentials')
+        || msg.includes('default firebase app does not exist')
+      );
+    };
+    try {
+      const created = await admin.auth().createUser({
+        email,
+        password,
+        displayName: name,
+      });
+      authUid = created.uid;
+    } catch (authErr: any) {
+      if (authErr?.code === 'auth/email-already-exists') {
+        const existing = await admin.auth().getUserByEmail(email);
+        authUid = existing.uid;
+        await admin.auth().updateUser(existing.uid, { password, displayName: name }).catch(() => {});
+      } else if (isAuthBackendUnavailable(authErr)) {
+        usedLegacyAuthFallback = true;
+        authUid = randomUUID().replace(/-/g, '').substring(0, 28);
+      } else {
+        throw authErr;
+      }
+    }
+
+    const userDoc: any = {
+      id: authUid,
+      name,
+      email,
+      cpf,
+      role,
+      permissions,
+      phone,
+      ...(usedLegacyAuthFallback ? { legacyAuth: true, password } : { authUid }),
+    };
+    await db.collection('users').doc(authUid).set(userDoc, { merge: true });
+
+    let attendantDoc: any = null;
+    let dentistDoc: any = null;
+
+    if (role === 'attendant') {
+      attendantDoc = {
+        id: authUid,
+        name,
+        email,
+        phone,
+        createdAt: new Date().toISOString(),
+        isActive: true,
+        ...(usedLegacyAuthFallback ? { legacyAuth: true, password } : { authUid }),
+      };
+      await db.collection('attendants').doc(authUid).set(attendantDoc, { merge: true });
+    }
+
+    if (role === 'dentist') {
+      dentistDoc = {
+        id: authUid,
+        name,
+        email,
+        phone,
+        specialty: specialty || 'Geral',
+        cro: cro || '00000',
+        createdAt: new Date().toISOString(),
+        isActive: true,
+        ...(usedLegacyAuthFallback ? { legacyAuth: true, password } : { authUid }),
+      };
+      await db.collection('dentists').doc(authUid).set(dentistDoc, { merge: true });
+    }
+
+    return res.json({ status: 'ok', legacyAuth: usedLegacyAuthFallback, user: userDoc, attendant: attendantDoc, dentist: dentistDoc });
+  } catch (err) {
+    console.error('/api/admin/users/create error:', err);
+    return res.status(500).json({ error: 'Falha ao criar usuário administrativo.', details: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // API Routes
 app.get("/api/data", (req, res) => {
   res.json(getData());
@@ -607,7 +1041,40 @@ app.post('/api/forgot-password', async (req, res) => {
 
     const token = randomUUID();
     const expiresAt = Date.now() + 60 * 60 * 1000;
-    const link = String(resetLink || `${String(origin || process.env.APP_ORIGIN || `http://localhost:${PORT}`).trim()}/?resetToken=${token}&uid=${targetUser.id}`);
+
+    // Resolve a front-end base URL preserving deployment subpaths (e.g. /bravoOdonto/).
+    const appBasePath = String(process.env.APP_BASE_PATH || '/').trim();
+    const normalizedAppBasePath = appBasePath.startsWith('/') ? appBasePath : `/${appBasePath}`;
+    const bodyOrigin = String(origin || '').trim();
+    const refererHeader = String(req.headers?.referer || '').trim();
+    const fallbackOrigin = String(process.env.APP_ORIGIN || `http://localhost:${PORT}`).trim();
+
+    const baseUrl = (() => {
+      if (resetLink) return String(resetLink).trim();
+
+      const normalizeBase = (raw: string) => {
+        if (!raw) return '';
+        try {
+          const parsed = new URL(raw);
+          const path = (parsed.pathname || '/').replace(/\/+$/, '/');
+          const hasSubPath = path !== '/';
+          const resolvedPath = hasSubPath ? path : normalizedAppBasePath.replace(/\/+$/, '/') || '/';
+          return `${parsed.origin}${resolvedPath}`;
+        } catch {
+          return '';
+        }
+      };
+
+      return (
+        normalizeBase(refererHeader)
+        || normalizeBase(bodyOrigin)
+        || normalizeBase(fallbackOrigin)
+        || `http://localhost:${PORT}/`
+      );
+    })();
+
+    const separator = baseUrl.includes('?') ? '&' : '?';
+    const link = `${baseUrl.replace(/\/+$/, '')}${separator}resetToken=${encodeURIComponent(token)}&uid=${encodeURIComponent(targetUser.id)}`;
 
     await db.collection('users').doc(targetUser.id).set({
       authUid: targetUser.authUid,
@@ -1152,6 +1619,54 @@ app.post('/api/fix-dependents-emails', (req, res) => {
 });
 
 // Reminder Logic
+// HTTP-based email via Brevo API — bypasses SMTP, aceita domínios não verificados
+const sendViaBrevo = async (from: string, to: string, subject: string, html?: string, text?: string) => {
+  const apiKey = process.env.BREVO_API_KEY;
+  if (!apiKey) throw new Error('BREVO_API_KEY not configured');
+  // Extrai "Nome" e "email" do formato "Nome <email>" ou "email"
+  const parseAddr = (addr: string) => {
+    const m = addr.match(/^(.+)<([^>]+)>$/);
+    return m ? { name: m[1].trim(), email: m[2].trim() } : { name: addr, email: addr };
+  };
+  const body: Record<string, any> = {
+    sender: parseAddr(from),
+    to: [parseAddr(to)],
+    subject,
+  };
+  if (html) body.htmlContent = html;
+  if (text) body.textContent = text;
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: { 'api-key': apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json() as any;
+  if (!res.ok) throw new Error(`Brevo API error ${res.status}: ${data.message || res.statusText}`);
+  console.log(`Email sent via Brevo to ${to} (messageId=${data.messageId})`);
+  return data;
+};
+
+// HTTP-based email via Resend API — bypasses SMTP (Railway, Render, etc. block outbound SMTP)
+const sendViaResend = async (from: string, to: string, subject: string, html?: string, text?: string, replyTo?: string) => {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) throw new Error('RESEND_API_KEY not configured');
+  const body: Record<string, any> = { from, to: [to], subject };
+  if (html) body.html = html;
+  if (text) body.text = text;
+  // Resend rejects reply_to that isn't plain "a@b.c" or "Name <a@b.c>"
+  const validEmailField = (v: string) => /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$|^.+<[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>$/.test(v.trim());
+  if (replyTo && validEmailField(replyTo)) body.reply_to = replyTo;
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json() as any;
+  if (!res.ok) throw new Error(`Resend API error ${res.status}: ${data.message || res.statusText}`);
+  console.log(`Email sent via Resend to ${to} (id=${data.id})`);
+  return data;
+};
+
 // Create a nodemailer transporter based on environment configuration.
 const createTransportFromEnv = () => {
   const provider = (process.env.SMTP_PROVIDER || "gmail").toLowerCase();
@@ -1196,9 +1711,11 @@ const createTransportFromEnv = () => {
       });
     }
 
-    // Default: Gmail using app password (legacy but works with App Passwords)
+    // Gmail via host explícito para respeitar SMTP_PORT/SMTP_SECURE (service:"gmail" força porta 465)
     return nodemailer.createTransport({
-      service: "gmail",
+      host: process.env.SMTP_HOST || "smtp.gmail.com",
+      port: Number(process.env.SMTP_PORT || 587),
+      secure: process.env.SMTP_SECURE === "true",
       auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
@@ -1318,6 +1835,15 @@ const sendEmail = async (to: string, subject: string, text?: string, html?: stri
         console.log(dbgLine);
         appendDebugLog(dbgLine);
       } catch (dbgErr) { console.warn('sendEmail debug log error', dbgErr); }
+
+    // HTTP API bypasses SMTP entirely — preferred on cloud platforms
+    const plainText = text || (finalHtml ? finalHtml.replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ') : undefined);
+    if (process.env.BREVO_API_KEY) {
+      return sendViaBrevo(fromAddress, to, subject, finalHtml, plainText);
+    }
+    if (process.env.RESEND_API_KEY) {
+      return sendViaResend(fromAddress, to, subject, finalHtml, plainText, replyTo);
+    }
 
     // Prepare mail options and attach logo inline (CID)
     const plain = text || (finalHtml ? finalHtml.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ') : undefined);
@@ -1452,6 +1978,14 @@ const sendRawEmail = async (to: string, subject: string, text?: string, html?: s
   } catch (dbgErr) { console.warn('sendRawEmail debug log error', dbgErr); }
 
   const plain = text || (finalHtml ? finalHtml.replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ') : '');
+
+  // HTTP API bypasses SMTP entirely — preferred on cloud platforms
+  if (process.env.BREVO_API_KEY) {
+    return sendViaBrevo(fromAddress, to, subject, finalHtml, plain);
+  }
+  if (process.env.RESEND_API_KEY) {
+    return sendViaResend(fromAddress, to, subject, finalHtml, plain, replyTo);
+  }
 
   // Read inline image as base64
   let imageBase64 = '';

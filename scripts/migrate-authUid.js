@@ -15,19 +15,56 @@ Observações:
 - Modo seguro (dry-run) apenas lista as alterações planejadas. Use `--apply` para executar as mudanças.
 */
 
-const admin = require('firebase-admin');
-const process = require('process');
+import admin from 'firebase-admin';
+import { createRequire } from 'module';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 const APPLY = process.argv.includes('--apply');
 
 async function main() {
   console.log('Migração iniciada. Modo APPLY:', APPLY);
-  if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    console.warn('Aviso: GOOGLE_APPLICATION_CREDENTIALS não está definido. O Admin SDK tentará usar credenciais padrão de aplicação (Application Default Credentials).');
+
+  // Lê configuração do projeto (mesmo padrão do server.ts)
+  let firebaseClientConfig = {};
+  try {
+    const configPath = join(__dirname, '..', 'firebase-applet-config.json');
+    if (existsSync(configPath)) {
+      firebaseClientConfig = JSON.parse(readFileSync(configPath, 'utf-8'));
+    }
+  } catch (e) {
+    console.warn('Aviso: não foi possível ler firebase-applet-config.json:', e);
   }
 
-  admin.initializeApp({ credential: admin.credential.applicationDefault() });
+  const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || firebaseClientConfig.projectId || '';
+  const FIREBASE_DATABASE_ID = process.env.FIREBASE_DATABASE_ID || (() => {
+    const id = (firebaseClientConfig.firestoreDatabaseId || '').trim();
+    return (id && id !== '(default)') ? id : '';
+  })();
+  const baseConfig = {};
+  if (FIREBASE_PROJECT_ID) baseConfig.projectId = FIREBASE_PROJECT_ID;
+
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    admin.initializeApp({ ...baseConfig, credential: admin.credential.cert(serviceAccount) });
+    console.log('Admin SDK inicializado com FIREBASE_SERVICE_ACCOUNT.');
+  } else if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    admin.initializeApp({ ...baseConfig, credential: admin.credential.applicationDefault() });
+    console.log('Admin SDK inicializado com GOOGLE_APPLICATION_CREDENTIALS (ADC).');
+  } else {
+    console.error('ERRO: Nenhuma credencial configurada.');
+    console.error('Defina FIREBASE_SERVICE_ACCOUNT (JSON da service account) ou GOOGLE_APPLICATION_CREDENTIALS (caminho para arquivo JSON).');
+    process.exit(1);
+  }
+
   const db = admin.firestore();
+  if (FIREBASE_DATABASE_ID) {
+    db.settings({ databaseId: FIREBASE_DATABASE_ID });
+    console.log('Firestore usando database ID:', FIREBASE_DATABASE_ID);
+  }
 
   // Load all users docs from Firestore
   const usersSnap = await db.collection('users').get();
