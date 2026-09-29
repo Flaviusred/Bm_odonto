@@ -902,7 +902,11 @@ export default function App() {
     if (user && user.id === updated.id) {
       setUser(updated);
     }
-    
+
+    const previousEmail = String(users.find(u => u.id === updated.id)?.email || '').trim().toLowerCase();
+    const nextEmail = String(updated.email || '').trim().toLowerCase();
+    const emailChanged = previousEmail !== '' && nextEmail !== '' && previousEmail !== nextEmail;
+
     // Atualização no Firebase Firestore
     try {
       await runWithLoading(async () => {
@@ -956,6 +960,9 @@ export default function App() {
       logAction('Edição', 'system', updated.id, `Usuário ${updated.name} atualizado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `users/${updated.id}`);
+      if (emailChanged) {
+        alert(error instanceof Error ? error.message : 'Falha ao sincronizar o e-mail com a autenticação. O e-mail anterior foi mantido.');
+      }
     }
   };
 
@@ -1471,10 +1478,17 @@ export default function App() {
   };
 
   const updateAttendant = async (updated: Attendant) => {
+    const previousEmail = String(attendants.find(a => a.id === updated.id)?.email || '').trim().toLowerCase();
+    const nextEmail = String(updated.email || '').trim().toLowerCase();
+    const emailChanged = previousEmail !== '' && nextEmail !== '' && previousEmail !== nextEmail;
     try {
+      const existingAttendant = attendants.find((a) => a.id === updated.id);
       if ((updated as any).password) {
-        const existingAttendant = attendants.find((a) => a.id === updated.id);
         await syncAuthPassword(updated.id, String((updated as any).password), updated.email, existingAttendant?.email);
+      }
+
+      if (emailChanged) {
+        await syncAuthEmail(updated.id, nextEmail, previousEmail);
       }
 
       const safeUpdated = stripPassword(updated as any);
@@ -1493,6 +1507,9 @@ export default function App() {
       logAction('Edição', 'attendant', updated.id, `Atendente ${updated.name} atualizado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `attendants/${updated.id}`);
+      if (emailChanged) {
+        alert(error instanceof Error ? error.message : 'Falha ao sincronizar o e-mail com a autenticação. O e-mail anterior foi mantido.');
+      }
     }
   };
 
@@ -2569,45 +2586,45 @@ export default function App() {
           ) : (
             <>
               {activeTab === 'dashboard' && (
-                <Dashboard 
-                  patients={patients} 
-                  appointments={appointments} 
+                <Dashboard
+                  patients={patients}
+                  appointments={appointments}
                   treatments={treatments}
                   dentists={dentists}
                   view="overview"
                 />
               )}
               {activeTab === 'dashboard-period' && (
-                <Dashboard 
-                  patients={patients} 
-                  appointments={appointments} 
+                <Dashboard
+                  patients={patients}
+                  appointments={appointments}
                   treatments={treatments}
                   dentists={dentists}
                   view="period"
                 />
               )}
               {activeTab === 'dashboard-by-type' && (
-                <Dashboard 
-                  patients={patients} 
-                  appointments={appointments} 
+                <Dashboard
+                  patients={patients}
+                  appointments={appointments}
                   treatments={treatments}
                   dentists={dentists}
                   view="by-type"
                 />
               )}
               {activeTab === 'dashboard-by-dentist' && (
-                <Dashboard 
-                  patients={patients} 
-                  appointments={appointments} 
+                <Dashboard
+                  patients={patients}
+                  appointments={appointments}
                   treatments={treatments}
                   dentists={dentists}
                   view="by-dentist"
                 />
               )}
               {activeTab === 'dashboard-by-status' && (
-                <Dashboard 
-                  patients={patients} 
-                  appointments={appointments} 
+                <Dashboard
+                  patients={patients}
+                  appointments={appointments}
                   treatments={treatments}
                   dentists={dentists}
                   view="by-status"
@@ -2691,9 +2708,11 @@ export default function App() {
                   appointments={appointments}
                   treatments={treatments}
                   dentists={dentists}
+                  documents={documents}
                   onAddPatient={addPatient}
                   onDeletePatient={deletePatient}
                   onUpdatePatient={updatePatient}
+                  onAddDocument={addDocument}
                   onTabChange={setActiveTab}
                 />
               )}
