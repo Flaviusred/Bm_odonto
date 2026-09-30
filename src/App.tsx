@@ -26,6 +26,7 @@ import { Input } from './components/Input';
 import { Button } from './components/Button';
 import { Modal } from './components/Modal';
 import { Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
+import { Toaster, toast } from 'sonner';
 import { emailService } from './services/emailService';
 import { API_BASE, safeRandomUUID, validateCPF } from './lib/utils';
 import { canAccessTab, getDefaultTabForUser, isDentistTab, isPatientTab } from './lib/permissions';
@@ -52,6 +53,8 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     (error as any)?.code === 'permission-denied';
   if (isPermissionError && (operationType === OperationType.LIST || operationType === OperationType.GET)) {
     console.warn(`Firestore [${operationType}] at ${path}: sem permissão (ignorado para este perfil).`);
+    // Sem isso o bloqueio ficava invisível: a tela simplesmente mostrava listas vazias, sem indicar a causa.
+    toast.error(`Sem permissão para carregar "${path}". Verifique o perfil/permissões desta conta.`);
     return;
   }
   console.error(`Firestore Error [${operationType}] at ${path}:`, message);
@@ -2402,6 +2405,7 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen bg-zinc-50">
+      <Toaster richColors position="top-center" />
       {globalLoading && <LoadingOverlay />}
       {user && (
         <ProfileEditModal 
