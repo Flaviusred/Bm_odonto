@@ -58,6 +58,8 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     return;
   }
   console.error(`Firestore Error [${operationType}] at ${path}:`, message);
+  // Falhas de escrita eram só logadas no console; a UI seguia como se tivesse salvo com sucesso.
+  toast.error(isPermissionError ? `Sem permissão para salvar em "${path}".` : `Falha ao salvar em "${path}". Tente novamente.`);
 }
 
 function normalizeUsersCollection(rows: any[]): User[] {
