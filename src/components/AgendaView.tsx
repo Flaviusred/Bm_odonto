@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Appointment, Patient, Dentist, DentistSchedule } from '../types';
 import { Button } from './Button';
 import { Card, CardContent } from './Card';
@@ -58,6 +58,36 @@ export function AgendaView({
     time: '',
     notes: '',
   });
+  const [patientSearch, setPatientSearch] = useState('');
+  const [dentistSearch, setDentistSearch] = useState('');
+
+  /** Limpa os filtros de pesquisa sempre que o modal de agendamento é aberto */
+  useEffect(() => {
+    if (isModalOpen) {
+      setPatientSearch('');
+      setDentistSearch('');
+    }
+  }, [isModalOpen]);
+
+  const sortedPatients = useMemo(
+    () => [...patients].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+    [patients]
+  );
+  const filteredPatients = useMemo(() => {
+    const term = patientSearch.trim().toLowerCase();
+    if (!term) return sortedPatients;
+    return sortedPatients.filter(p => p.name.toLowerCase().includes(term) || p.id === formData.patientId);
+  }, [sortedPatients, patientSearch, formData.patientId]);
+
+  const sortedDentists = useMemo(
+    () => [...dentists].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+    [dentists]
+  );
+  const filteredDentists = useMemo(() => {
+    const term = dentistSearch.trim().toLowerCase();
+    if (!term) return sortedDentists;
+    return sortedDentists.filter(d => d.name.toLowerCase().includes(term) || d.id === formData.dentistId);
+  }, [sortedDentists, dentistSearch, formData.dentistId]);
 
   const getPatient = (id: string) => patients.find(p => p.id === id);
   const getPatientName = (id: string) => getPatient(id)?.name || 'Paciente não encontrado';
@@ -587,6 +617,15 @@ export function AgendaView({
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-zinc-700">Paciente</label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+              <Input
+                placeholder="Buscar paciente..."
+                className="pl-9 h-9 text-sm bg-zinc-50 border-zinc-200 focus:bg-white transition-colors"
+                value={patientSearch}
+                onChange={(e) => setPatientSearch(e.target.value)}
+              />
+            </div>
             <select 
               className={cn(
                 "flex h-11 sm:h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
@@ -597,14 +636,24 @@ export function AgendaView({
               onChange={(e) => setFormData({ ...formData, patientId: e.target.value })}
             >
               <option value="">Selecione um paciente</option>
-              {patients.map(p => (
+              {filteredPatients.map(p => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
+              {filteredPatients.length === 0 && <option value="" disabled>Nenhum paciente encontrado</option>}
             </select>
             {errors.patientId && <p className="text-xs text-red-500">{errors.patientId}</p>}
           </div>
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-zinc-700">Dentista</label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+              <Input
+                placeholder="Buscar dentista..."
+                className="pl-9 h-9 text-sm bg-zinc-50 border-zinc-200 focus:bg-white transition-colors"
+                value={dentistSearch}
+                onChange={(e) => setDentistSearch(e.target.value)}
+              />
+            </div>
             <select 
               className={cn(
                 "flex h-11 sm:h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
@@ -615,9 +664,10 @@ export function AgendaView({
               onChange={(e) => setFormData({ ...formData, dentistId: e.target.value })}
             >
               <option value="">Selecione um dentista</option>
-              {dentists.map(d => (
+              {filteredDentists.map(d => (
                 <option key={d.id} value={d.id}>{d.name} - {d.specialty}</option>
               ))}
+              {filteredDentists.length === 0 && <option value="" disabled>Nenhum dentista encontrado</option>}
             </select>
             {errors.dentistId && <p className="text-xs text-red-500">{errors.dentistId}</p>}
             
