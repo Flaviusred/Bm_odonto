@@ -487,7 +487,6 @@ export function DentistScheduleManager({
               ))}
               {filteredPatientOptions.length === 0 && <option value="" disabled>Nenhum paciente encontrado</option>}
             </select>
-            </select>
             {errors.patientId && <p className="text-xs text-red-500">{errors.patientId}</p>}
           </div>
           <div className="space-y-1.5">
