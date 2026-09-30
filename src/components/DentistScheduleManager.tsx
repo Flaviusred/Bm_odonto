@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Dentist, Appointment, Patient, DentistSchedule } from '../types';
 import { Card, CardContent, CardHeader, CardTitle } from './Card';
 import { Button } from './Button';
 import { Input } from './Input';
 import { Modal } from './Modal';
-import { Calendar, Clock, UserRound, Plus, ChevronLeft, ChevronRight, Settings, Trash2, Lock, Unlock } from 'lucide-react';
+import { Calendar, Clock, UserRound, Plus, ChevronLeft, ChevronRight, Settings, Trash2, Lock, Unlock, Search } from 'lucide-react';
 import { parseDate, formatDateLocal } from '../lib/dateUtils';
 import { cn } from '../lib/utils';
 
@@ -38,6 +38,24 @@ export function DentistScheduleManager({
     patientId: '',
     notes: '',
   });
+  const [patientSelectSearch, setPatientSelectSearch] = useState('');
+
+  /** Limpa o filtro de pesquisa sempre que o modal de agendamento é aberto */
+  useEffect(() => {
+    if (isAppointmentModalOpen) {
+      setPatientSelectSearch('');
+    }
+  }, [isAppointmentModalOpen]);
+
+  const sortedPatients = useMemo(
+    () => [...patients].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+    [patients]
+  );
+  const filteredPatientOptions = useMemo(() => {
+    const term = patientSelectSearch.trim().toLowerCase();
+    if (!term) return sortedPatients;
+    return sortedPatients.filter(p => p.name.toLowerCase().includes(term) || p.id === appointmentFormData.patientId);
+  }, [sortedPatients, patientSelectSearch, appointmentFormData.patientId]);
 
   const selectedDentist = dentists.find(d => d.id === selectedDentistId);
   const dentistAppointments = appointments.filter(a => a.dentistId === selectedDentistId);
@@ -445,6 +463,15 @@ export function DentistScheduleManager({
         <form onSubmit={handleAddAppointment} className="space-y-4">
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-zinc-700">Paciente</label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+              <Input
+                placeholder="Buscar paciente..."
+                className="pl-9 h-9 text-sm bg-zinc-50 border-zinc-200 focus:bg-white transition-colors"
+                value={patientSelectSearch}
+                onChange={(e) => setPatientSelectSearch(e.target.value)}
+              />
+            </div>
             <select 
               className={cn(
                 "flex h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
@@ -455,9 +482,11 @@ export function DentistScheduleManager({
               onChange={(e) => setAppointmentFormData({ ...appointmentFormData, patientId: e.target.value })}
             >
               <option value="">Selecione um paciente</option>
-              {patients.map(p => (
+              {filteredPatientOptions.map(p => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
+              {filteredPatientOptions.length === 0 && <option value="" disabled>Nenhum paciente encontrado</option>}
+            </select>
             </select>
             {errors.patientId && <p className="text-xs text-red-500">{errors.patientId}</p>}
           </div>

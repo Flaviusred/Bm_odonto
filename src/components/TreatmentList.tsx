@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import React from 'react';
 import { Plus, Search, Stethoscope, Trash2, Calendar, User, UserRound, DollarSign } from 'lucide-react';
 import { Button } from './Button';
@@ -39,6 +39,36 @@ export function TreatmentList({
     type: 'Consultation',
     date: new Date().toISOString().split('T')[0],
   });
+  const [patientSelectSearch, setPatientSelectSearch] = useState('');
+  const [dentistSelectSearch, setDentistSelectSearch] = useState('');
+
+  /** Limpa os filtros de pesquisa sempre que o modal de registro é aberto */
+  useEffect(() => {
+    if (isModalOpen) {
+      setPatientSelectSearch('');
+      setDentistSelectSearch('');
+    }
+  }, [isModalOpen]);
+
+  const sortedPatients = useMemo(
+    () => [...patients].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+    [patients]
+  );
+  const filteredPatientOptions = useMemo(() => {
+    const term = patientSelectSearch.trim().toLowerCase();
+    if (!term) return sortedPatients;
+    return sortedPatients.filter(p => p.name.toLowerCase().includes(term) || p.id === formData.patientId);
+  }, [sortedPatients, patientSelectSearch, formData.patientId]);
+
+  const sortedDentists = useMemo(
+    () => [...dentists].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+    [dentists]
+  );
+  const filteredDentistOptions = useMemo(() => {
+    const term = dentistSelectSearch.trim().toLowerCase();
+    if (!term) return sortedDentists;
+    return sortedDentists.filter(d => d.name.toLowerCase().includes(term) || d.id === formData.dentistId);
+  }, [sortedDentists, dentistSelectSearch, formData.dentistId]);
 
   const getPatient = (id: string) => patients.find(p => p.id === id);
   const getPatientName = (id: string) => getPatient(id)?.name || 'Paciente não encontrado';
@@ -244,6 +274,15 @@ export function TreatmentList({
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-zinc-700">Paciente</label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+              <Input
+                placeholder="Buscar paciente..."
+                className="pl-9 h-9 text-sm bg-zinc-50 border-zinc-200 focus:bg-white transition-colors"
+                value={patientSelectSearch}
+                onChange={(e) => setPatientSelectSearch(e.target.value)}
+              />
+            </div>
             <select 
               className={cn(
                 "flex h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
@@ -254,14 +293,24 @@ export function TreatmentList({
               onChange={(e) => setFormData({ ...formData, patientId: e.target.value })}
             >
               <option value="">Selecione um paciente</option>
-              {patients.map(p => (
+              {filteredPatientOptions.map(p => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
+              {filteredPatientOptions.length === 0 && <option value="" disabled>Nenhum paciente encontrado</option>}
             </select>
             {errors.patientId && <p className="text-xs text-red-500">{errors.patientId}</p>}
           </div>
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-zinc-700">Dentista</label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+              <Input
+                placeholder="Buscar dentista..."
+                className="pl-9 h-9 text-sm bg-zinc-50 border-zinc-200 focus:bg-white transition-colors"
+                value={dentistSelectSearch}
+                onChange={(e) => setDentistSelectSearch(e.target.value)}
+              />
+            </div>
             <select 
               className={cn(
                 "flex h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500",
@@ -272,9 +321,10 @@ export function TreatmentList({
               onChange={(e) => setFormData({ ...formData, dentistId: e.target.value })}
             >
               <option value="">Selecione um dentista</option>
-              {dentists.map(d => (
+              {filteredDentistOptions.map(d => (
                 <option key={d.id} value={d.id}>{d.name}</option>
               ))}
+              {filteredDentistOptions.length === 0 && <option value="" disabled>Nenhum dentista encontrado</option>}
             </select>
             {errors.dentistId && <p className="text-xs text-red-500">{errors.dentistId}</p>}
           </div>
