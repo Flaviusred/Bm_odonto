@@ -2580,6 +2580,7 @@ export default function App() {
               onUpdateTreatment={updateTreatment}
               onAddDocument={addDocument}
               onUpdateAppointmentStatus={updateAppointmentStatus}
+              onUpdatePatient={updatePatient}
               schedules={schedules}
               unseenCount={unseenCount}
               setUnseenCount={setUnseenCount}

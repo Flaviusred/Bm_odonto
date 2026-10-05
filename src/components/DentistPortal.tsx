@@ -23,7 +23,9 @@ import {
   ChevronUp,
   AlertCircle,
   ChevronLeft,
-  Bell
+  Bell,
+  Pencil,
+  Save
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Toaster, toast } from 'sonner';
@@ -46,6 +48,7 @@ interface DentistPortalProps {
   onUpdateTreatment: (treatment: Treatment) => void;
   onAddDocument: (doc: Omit<PatientDocument, 'id' | 'uploadedAt'>) => void;
   onUpdateAppointmentStatus: (id: string, status: Appointment['status']) => void;
+  onUpdatePatient: (patient: Patient) => void;
   schedules: DentistSchedule[];
   unseenCount: number;
   setUnseenCount: React.Dispatch<React.SetStateAction<number>>;
@@ -70,6 +73,7 @@ export function DentistPortal({
   onUpdateTreatment,
   onAddDocument,
   onUpdateAppointmentStatus,
+  onUpdatePatient,
   schedules,
   unseenCount, setUnseenCount,
   markAllNotificationsRead,
@@ -97,9 +101,36 @@ export function DentistPortal({
   ));
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
+
+  /** selectedPatient é uma cópia; sem isto, edições feitas em outra tela (ex.: anamnese) ficam invisíveis até reselecionar o paciente */
+  useEffect(() => {
+    if (!selectedPatient) return;
+    const fresh = patients.find(p => p.id === selectedPatient.id);
+    if (fresh && fresh !== selectedPatient) setSelectedPatient(fresh);
+  }, [patients, selectedPatient]);
+
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [historyGroupBy, setHistoryGroupBy] = useState<'date' | 'dentist'>('date');
   const [isTreatmentModalOpen, setIsTreatmentModalOpen] = useState(false);
+  const [isEditingAnamnesis, setIsEditingAnamnesis] = useState(false);
+  const [anamnesisDraft, setAnamnesisDraft] = useState('');
+
+  const startEditingAnamnesis = () => {
+    setAnamnesisDraft(selectedPatient?.anamnesis || '');
+    setIsEditingAnamnesis(true);
+  };
+
+  const handleSaveAnamnesis = () => {
+    if (!selectedPatient) return;
+    onUpdatePatient({ ...selectedPatient, anamnesis: anamnesisDraft });
+    setIsEditingAnamnesis(false);
+    toast.success('Anamnese atualizada com sucesso.');
+  };
+
+  /** Fecha o modo de edição ao trocar de paciente */
+  useEffect(() => {
+    setIsEditingAnamnesis(false);
+  }, [selectedPatient?.id]);
   const [isAppointmentModalOpen, setIsAppointmentModalOpen] = useState(false);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [editingTreatment, setEditingTreatment] = useState<Treatment | null>(null);
@@ -533,13 +564,39 @@ export function DentistPortal({
                     <span>CPF: {selectedPatient.cpf}</span>
                   </div>
                   <div className="pt-4 border-t border-zinc-100">
-                    <h4 className="text-sm font-semibold text-emerald-600 mb-2 flex items-center gap-2">
-                      <Stethoscope className="h-4 w-4 shrink-0" />
-                      Anamnese
+                    <h4 className="text-sm font-semibold text-emerald-600 mb-2 flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-2">
+                        <Stethoscope className="h-4 w-4 shrink-0" />
+                        Anamnese
+                      </span>
+                      {!isEditingAnamnesis && (
+                        <button type="button" onClick={startEditingAnamnesis} className="text-zinc-400 hover:text-emerald-600 transition-colors" title="Editar anamnese">
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                      )}
                     </h4>
-                    <p className="text-sm text-zinc-600 bg-zinc-50 p-3 rounded-lg border border-zinc-100 italic">
-                      {selectedPatient.anamnesis || 'Nenhuma anamnese registrada.'}
-                    </p>
+                    {isEditingAnamnesis ? (
+                      <div className="space-y-2">
+                        <textarea
+                          className="flex min-h-[100px] w-full rounded-lg border border-zinc-200 bg-white p-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                          value={anamnesisDraft}
+                          onChange={e => setAnamnesisDraft(e.target.value)}
+                          placeholder="Descreva o histórico médico do paciente..."
+                        />
+                        <div className="flex gap-2">
+                          <Button type="button" size="sm" className="gap-1.5 flex-1" onClick={handleSaveAnamnesis}>
+                            <Save className="h-3.5 w-3.5" /> Salvar
+                          </Button>
+                          <Button type="button" size="sm" variant="outline" className="flex-1" onClick={() => setIsEditingAnamnesis(false)}>
+                            Cancelar
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-zinc-600 bg-zinc-50 p-3 rounded-lg border border-zinc-100 italic">
+                        {selectedPatient.anamnesis || 'Nenhuma anamnese registrada.'}
+                      </p>
+                    )}
                   </div>
                   <div className="pt-4 flex flex-col gap-2">
                     <Button onClick={() => setIsHistoryModalOpen(true)} variant="secondary" className="w-full gap-2 text-xs sm:text-sm">
