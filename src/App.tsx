@@ -2430,11 +2430,11 @@ export default function App() {
         />
       )}
       {/* Label de Desenvolvimento */}
-      <div className="fixed top-0 left-0 right-0 z-[200] flex justify-center pointer-events-none">
+      {/*<div className="fixed top-0 left-0 right-0 z-[200] flex justify-center pointer-events-none">
         <div className="bg-yellow-500/80 backdrop-blur-sm text-white text-xs font-bold px-4 py-1 rounded-b-lg shadow-sm">
           SISTEMA EM DESENVOLVIMENTO - TESTES
         </div>
-      </div>
+      </div>*/}
 
       <Sidebar 
         activeTab={activeTab} 
