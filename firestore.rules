@@ -72,11 +72,11 @@ service cloud.firestore {
                       request.auth.uid == request.resource.data.userId
                       || (
                         request.resource.data.appointmentId is string
-                        && exists(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId))
-                        && request.resource.data.userId == get(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId)).data.dentistAuthUid
+                        && existsAfter(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId))
+                        && request.resource.data.userId == getAfter(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId)).data.dentistAuthUid
                         && (
                           isStaff()
-                          || request.auth.uid == get(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId)).data.patientAuthUid
+                          || request.auth.uid == getAfter(/databases/$(database)/documents/appointments/$(request.resource.data.appointmentId)).data.patientAuthUid
                         )
                       )
                     );
