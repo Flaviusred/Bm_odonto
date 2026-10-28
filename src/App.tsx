@@ -901,8 +901,6 @@ export default function App() {
   };
 
   const updateUser = async (updated: User) => {
-    console.log('Updating user:', updated);
-    
     // Atualiza o estado do usuário logado se for o mesmo
     if (user && user.id === updated.id) {
       setUser(updated);

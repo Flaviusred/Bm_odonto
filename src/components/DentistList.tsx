@@ -110,8 +110,6 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
       // Update the dentist's password in the main users list
       // We need to pass this up to App.tsx
       onUpdateDentist({ ...confirmAction.dentist, password: newPassword });
-      
-      console.log(`Sending email to ${confirmAction.dentist.email}: New password is ${newPassword}`);
     }
     setConfirmAction(null);
   };

@@ -375,7 +375,6 @@ function PatientListContent({
       const newPassword = Math.random().toString(36).substr(2, 8);
       setGeneratedPassword({ password: newPassword, email: confirmAction.patient.email });
       onUpdatePatient({ ...confirmAction.patient, password: newPassword });
-      console.log(`Sending email to ${confirmAction.patient.email}: New password is ${newPassword}`);
     }
     setConfirmAction(null);
   };
