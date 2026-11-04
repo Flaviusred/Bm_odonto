@@ -92,13 +92,21 @@ export interface Appointment {
   dentistAuthUid?: string | null;
 }
 
+import type { ProcedureType } from './constants';
+
+export interface TreatmentProcedure {
+  type: ProcedureType;
+  quantity: number;
+  description?: string;
+}
+
 export interface Treatment {
   id: string;
   patientId: string;
   dentistId: string;
   appointmentId: string;
   description: string;
-  type?: 'Limpeza' | 'Extração' | 'Obturação' | 'Canal' | 'Ortodontia' | 'Outro';
+  procedures: TreatmentProcedure[];
   date: string;
   createdAt: string;
   patientAuthUid?: string | null;

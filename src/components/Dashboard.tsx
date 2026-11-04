@@ -29,6 +29,7 @@ import { Card, CardContent, CardHeader, CardTitle } from './Card';
 import { cn } from '../lib/utils';
 import { formatDateDDMMYYYY, parseDate, parseDateTime } from '../lib/dateUtils';
 import { Patient, Appointment, Treatment, Dentist } from '../types';
+import { PROCEDURE_LABELS, ProcedureType } from '../constants';
 
 interface DashboardProps {
   patients: Patient[];
@@ -39,6 +40,7 @@ interface DashboardProps {
 }
 
 type PeriodKey = '7d' | '30d' | '90d' | 'year' | 'all';
+type ProcedureGrouping = 'day' | 'week' | 'month' | 'year';
 
 const PERIOD_OPTIONS: Array<{ key: PeriodKey; label: string }> = [
   { key: '7d', label: '7 dias' },
@@ -59,6 +61,7 @@ const PATIENT_TYPE_LABELS: Record<string, string> = {
 export function Dashboard({ patients, appointments, treatments, dentists, view = 'overview' }: DashboardProps) {
   const [chartsReady, setChartsReady] = useState(false);
   const [selectedPeriod, setSelectedPeriod] = useState<PeriodKey>('30d');
+  const [procedureGrouping, setProcedureGrouping] = useState<ProcedureGrouping>('day');
   useEffect(() => {
     const id = requestAnimationFrame(() => setChartsReady(true));
     return () => cancelAnimationFrame(id);
@@ -177,6 +180,59 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
     }, {} as Record<string, number>);
     return Object.entries(dentistCounts).map(([name, value]) => ({ name, value }));
   }, [appointmentsInPeriod, dentists]);
+
+  const procedureQuantityData = useMemo(() => {
+    const filteredTreatments = treatments.filter((treatment) => {
+      const date = parseDate(treatment.date);
+      if (Number.isNaN(date.getTime())) return false;
+      if (!periodStartDate) return true;
+      const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+      return date >= periodStartDate && date <= endOfToday;
+    });
+
+    const grouped = new Map<string, number>();
+    filteredTreatments.forEach((treatment) => {
+      const date = parseDate(treatment.date);
+      let periodLabel: string;
+
+      if (procedureGrouping === 'day') {
+        periodLabel = formatDateDDMMYYYY(treatment.date);
+      } else if (procedureGrouping === 'week') {
+        const weekStart = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+        const dayOfWeek = weekStart.getDay();
+        weekStart.setDate(weekStart.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+        periodLabel = `Sem. ${weekStart.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`;
+      } else if (procedureGrouping === 'month') {
+        periodLabel = date.toLocaleDateString('pt-BR', { month: '2-digit', year: 'numeric' });
+      } else {
+        periodLabel = String(date.getFullYear());
+      }
+
+      treatment.procedures.forEach((procedure) => {
+        const label = PROCEDURE_LABELS[procedure.type as ProcedureType] || procedure.type;
+        const key = `${periodLabel}|||${label}`;
+        grouped.set(key, (grouped.get(key) || 0) + Math.max(0, Number(procedure.quantity) || 0));
+      });
+    });
+
+    const periods = Array.from(new Set(Array.from(grouped.keys()).map((key) => key.split('|||')[0])));
+    return periods.map((period) => {
+      const values: Record<string, string | number> = { period };
+      grouped.forEach((quantity, key) => {
+        const [keyPeriod, procedure] = key.split('|||');
+        if (keyPeriod === period) values[procedure] = quantity;
+      });
+      values.total = Object.entries(values)
+        .filter(([key]) => key !== 'period')
+        .reduce((sum, [, value]) => sum + Number(value), 0);
+      return values;
+    });
+  }, [periodStartDate, procedureGrouping, today, treatments]);
+
+  const procedureQuantityTotal = useMemo(
+    () => procedureQuantityData.reduce((total, period) => total + Number(period.total || 0), 0),
+    [procedureQuantityData]
+  );
 
   const recentAppointments = appointments
     .sort((a, b) => parseDateTime(b.date, b.time).getTime() - parseDateTime(a.date, a.time).getTime())
@@ -357,6 +413,49 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
         </Card>
         )}
         </div>
+      )}
+
+      {(view === 'overview' || view === 'period') && (
+        <Card className="border-none shadow-sm bg-white">
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold flex items-center justify-between gap-4 flex-wrap">
+              <span className="flex items-center gap-2">
+                <Stethoscope className="h-5 w-5 text-emerald-500" />
+                Quantidade de Procedimentos
+              </span>
+              <select
+                value={procedureGrouping}
+                onChange={(event) => setProcedureGrouping(event.target.value as ProcedureGrouping)}
+                className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-normal text-zinc-600"
+                aria-label="Agrupar procedimentos por período"
+              >
+                <option value="day">Por dia</option>
+                <option value="week">Por semana</option>
+                <option value="month">Por mês</option>
+                <option value="year">Por ano</option>
+              </select>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="mb-4 rounded-xl bg-emerald-50 border border-emerald-100 px-4 py-3">
+              <p className="text-sm text-emerald-700">Total de procedimentos no período selecionado</p>
+              <p className="text-3xl font-bold text-emerald-700">{procedureQuantityTotal}</p>
+            </div>
+            <div className="h-[320px]">
+              {!chartsReady ? <div className="h-full w-full" /> : (
+                <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+                  <BarChart data={procedureQuantityData}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                    <XAxis dataKey="period" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
+                    <YAxis allowDecimals={false} axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} />
+                    <Tooltip />
+                    <Bar dataKey="total" name="Procedimentos" fill="#10b981" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* Atendimentos por Tipo de Usuário — isolado */}

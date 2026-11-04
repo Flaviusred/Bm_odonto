@@ -9,6 +9,7 @@ import { Patient, Appointment, Treatment, Dentist, PatientType, PatientDocument 
 import { patientService } from '../services/patientService';
 import { cn, validateCPF, maskCPF, maskPhone, maskCEP } from '../lib/utils';
 import { formatDateDDMMYYYY, formatDateLocal, parseDate, parseDateTime } from '../lib/dateUtils';
+import { formatTreatmentProcedures } from '../constants';
 
 const DOCUMENT_MAX_MB = 1;
 const DOCUMENT_MAX_BYTES = DOCUMENT_MAX_MB * 1024 * 1024;
@@ -377,21 +378,6 @@ function PatientListContent({
       onUpdatePatient({ ...confirmAction.patient, password: newPassword });
     }
     setConfirmAction(null);
-  };
-
-  const translateType = (type?: string) => {
-    const translations: Record<string, string> = {
-      'cleaning': 'Limpeza',
-      'extraction': 'Extração',
-      'filling': 'Obturação',
-      'root-canal': 'Canal',
-      'orthodontics': 'Ortodontia',
-      'other': 'Outro',
-      'exam': 'Exame',
-      'document': 'Documento',
-      'x-ray': 'Raio-X'
-    };
-    return type ? (translations[type] || type) : 'Geral';
   };
 
   const getDentistName = (id: string) => dentists.find(d => d.id === id)?.name || 'Dentista';
@@ -816,7 +802,7 @@ function PatientListContent({
       .filter(t => t.patientId === selectedPatientDetails.id)
       .filter(t => 
         (t.description.toLowerCase().includes(historySearch.toLowerCase()) ||
-         (t.type && t.type.toLowerCase().includes(historySearch.toLowerCase()))) &&
+         formatTreatmentProcedures(t.procedures).toLowerCase().includes(historySearch.toLowerCase())) &&
         (dentistFilter === 'all' || t.dentistId === dentistFilter)
       )
       .sort((a, b) => parseDate(b.date).getTime() - parseDate(a.date).getTime());
@@ -1025,7 +1011,7 @@ function PatientListContent({
                                     <Stethoscope className="h-4 w-4" />
                                   </div>
                                   <div>
-                                    <h4 className="font-bold text-zinc-900">{translateType(t.type)}</h4>
+                                    <h4 className="font-bold text-zinc-900">{formatTreatmentProcedures(t.procedures)}</h4>
                                     <p className="text-xs text-zinc-500">{t.description.substring(0, 50)}{t.description.length > 50 ? '...' : ''}</p>
                                   </div>
                                 </div>

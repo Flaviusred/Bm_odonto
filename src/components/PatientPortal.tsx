@@ -7,6 +7,7 @@ import { Modal } from './Modal';
 import { Calendar, Stethoscope, UserRound, Phone, Mail, MapPin, CreditCard, Clock, CheckCircle2, XCircle, Users, AlertCircle } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { parseDate } from '../lib/dateUtils';
+import { formatTreatmentProcedures } from '../constants';
 
 interface PatientPortalProps {
   activeTab: string;
@@ -63,26 +64,6 @@ export function PatientPortal({
     e.preventDefault();
     onUpdateProfile({ ...patient, ...formData });
     alert('Perfil atualizado com sucesso!');
-  };
-
-  const translateType = (type: string) => {
-    const types: Record<string, string> = {
-      'Consultation': 'Consulta',
-      'Surgery': 'Cirurgia',
-      'Cleaning': 'Limpeza',
-      'Extraction': 'Extração',
-      'Filling': 'Restauração',
-      'Root Canal': 'Canal',
-      'Orthodontics': 'Ortodontia',
-      'X-Ray': 'Raio-X',
-      'Exam': 'Exame',
-      'Other': 'Outro',
-      'Identity': 'Identidade',
-      'Medical Report': 'Laudo Médico',
-      'Prescription': 'Receita',
-      'Consent Form': 'Termo de Consentimento'
-    };
-    return types[type] || type;
   };
 
   if (activeTab === 'patient-profile') {
@@ -469,11 +450,9 @@ export function PatientPortal({
                           <Calendar className="h-3 w-3" />
                           {parseDate(treatment.date).toLocaleDateString('pt-BR')}
                         </div>
-                        {treatment.type && (
-                          <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 text-[10px] font-bold uppercase">
-                            {translateType(treatment.type)}
-                          </span>
-                        )}
+                        <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 text-[10px] font-bold uppercase">
+                          {formatTreatmentProcedures(treatment.procedures)}
+                        </span>
                       </div>
                     </div>
                   </div>
