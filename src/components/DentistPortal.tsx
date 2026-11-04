@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { User, Patient, Appointment, Dentist, Treatment, PatientDocument, DentistSchedule } from '../types';
+import { User, Patient, Appointment, Dentist, Treatment, TreatmentProcedure, PatientDocument, DentistSchedule } from '../types';
 import { formatDateDDMMYYYY, parseDate, formatDateLocal } from '../lib/dateUtils';
+import { PROCEDURE_TYPES, formatTreatmentProcedures, ProcedureType } from '../constants';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './Card';
 import { Button } from './Button';
 import { Input } from './Input';
@@ -158,9 +159,13 @@ export function DentistPortal({
 
   
 
-  const [treatmentForm, setTreatmentForm] = useState({
+  const [treatmentForm, setTreatmentForm] = useState<{
+    description: string;
+    procedures: TreatmentProcedure[];
+    date: string;
+  }>({
     description: '',
-    type: 'cleaning' as Treatment['type'],
+    procedures: [{ type: 'PROFILAXIA' as ProcedureType, quantity: 1 }],
     date: formatDateLocal(new Date()),
   });
 
@@ -404,37 +409,31 @@ export function DentistPortal({
     blocked: 'Bloqueado',
   };
 
-  const translateType = (type?: string) => {
-    const translations: Record<string, string> = {
-      'cleaning': 'Limpeza',
-      'extraction': 'Extração',
-      'filling': 'Obturação',
-      'root-canal': 'Canal',
-      'orthodontics': 'Ortodontia',
-      'other': 'Outro',
-      'exam': 'Exame',
-      'document': 'Documento',
-      'x-ray': 'Raio-X'
-    };
-    return type ? (translations[type] || type) : 'Geral';
-  };
-
   const handleRegisterTreatment = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedPatient || !currentAppointment) return;
+    if (!selectedPatient || !currentAppointment || treatmentForm.procedures.length === 0) return;
+    if (treatmentForm.procedures.some(p => p.type === 'OUTRO' && !p.description?.trim())) return;
 
     onAddTreatment({
       patientId: selectedPatient.id,
       dentistId,
       appointmentId: currentAppointment.id,
-      ...treatmentForm,
+      description: treatmentForm.description,
+      procedures: treatmentForm.procedures,
+      date: treatmentForm.date,
     });
 
     onUpdateAppointmentStatus(currentAppointment.id, 'completed');
     setIsTreatmentModalOpen(false);
-    setTreatmentForm({ description: '', type: 'cleaning', date: formatDateLocal(new Date()) });
+    setTreatmentForm({ description: '', procedures: [{ type: 'PROFILAXIA', quantity: 1 }], date: formatDateLocal(new Date()) });
     setIsScheduleNextPromptOpen(true);
   };
+
+  const translateDocumentType = (type: PatientDocument['type']) => ({
+    Exame: 'Exame',
+    Documento: 'Documento',
+    'Raio-X': 'Raio-X',
+  }[type]);
 
   const handleScheduleNext = (e: React.FormEvent) => {
     e.preventDefault();
@@ -633,7 +632,7 @@ export function DentistPortal({
                             <FileText className="h-4 w-4 text-zinc-400 shrink-0" />
                             <div className="truncate">
                               <p className="text-sm font-medium text-zinc-900 truncate">{doc.name}</p>
-                              <p className="text-[10px] text-zinc-500 uppercase">{translateType(doc.type)}</p>
+                              <p className="text-[10px] text-zinc-500 uppercase">{translateDocumentType(doc.type)}</p>
                             </div>
                           </div>
                           <a href={doc.url} target="_blank" rel="noreferrer" className="text-emerald-600 hover:underline text-xs shrink-0 ml-2">Ver</a>
@@ -690,7 +689,7 @@ export function DentistPortal({
                       .filter(t => t.patientId === selectedPatient.id)
                       .filter(t => 
                           (t.description || '').toLowerCase().includes(historySearch.toLowerCase()) ||
-                          ((t.type || '').toLowerCase().includes(historySearch.toLowerCase()))
+                          formatTreatmentProcedures(t.procedures).toLowerCase().includes(historySearch.toLowerCase())
                         )
                       .sort((a, b) => parseDate(b.date).getTime() - parseDate(a.date).getTime())
                       .map(t => {
@@ -704,7 +703,7 @@ export function DentistPortal({
                               <div className="space-y-1 pr-4">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <h4 className="font-bold text-zinc-900 group-hover:text-emerald-600 transition-colors">
-                                    {translateType(t.type)}
+                                    {formatTreatmentProcedures(t.procedures)}
                                   </h4>
                                   <span className="text-xs font-medium text-zinc-400 whitespace-nowrap">
                                     {parseDate(t.date).toLocaleDateString('pt-BR')}
@@ -732,7 +731,7 @@ export function DentistPortal({
                                   <div className="mt-4 pt-4 border-t border-zinc-200 flex items-center justify-between">
                                     <div className="flex flex-wrap gap-2">
                                       <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md border border-emerald-100">
-                                        {translateType(t.type)}
+                                        {formatTreatmentProcedures(t.procedures)}
                                       </span>
                                       <span className="text-[10px] font-bold uppercase tracking-wider text-zinc-500 bg-white px-2 py-1 rounded-md border border-zinc-200">
                                         Ref: {t.id.slice(-6)}
@@ -1015,11 +1014,9 @@ export function DentistPortal({
                                 <Calendar className="h-3 w-3" />
                                 {parseDate(t.date).toLocaleDateString('pt-BR')}
                               </div>
-                              {t.type && (
-                                <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 text-[10px] font-bold uppercase">
-                                  {translateType(t.type)}
-                                </span>
-                              )}
+                              <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 text-[10px] font-bold uppercase">
+                                {formatTreatmentProcedures(t.procedures)}
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -1061,7 +1058,7 @@ export function DentistPortal({
                     <h4 className="text-xs font-bold text-zinc-500 uppercase sticky top-0 bg-white py-1">{date}</h4>
                     {ts.map(t => (
                       <div key={t.id} className="p-3 bg-zinc-50 rounded-lg border border-zinc-100 text-sm">
-                        <p className="font-bold text-zinc-900">{translateType(t.type)}</p>
+                        <p className="font-bold text-zinc-900">{formatTreatmentProcedures(t.procedures)}</p>
                         <p className="text-zinc-600 mt-1">{t.description}</p>
                         <p className="text-[10px] text-zinc-400 mt-2 font-medium">Dentista: {getDentistName(t.dentistId)}</p>
                       </div>
@@ -1080,7 +1077,7 @@ export function DentistPortal({
                     <h4 className="text-xs font-bold text-zinc-500 uppercase sticky top-0 bg-white py-1">{dentistName}</h4>
                     {ts.sort((a, b) => parseDate(b.date).getTime() - parseDate(a.date).getTime()).map(t => (
                       <div key={t.id} className="p-3 bg-zinc-50 rounded-lg border border-zinc-100 text-sm">
-                        <p className="font-bold text-zinc-900">{translateType(t.type)}</p>
+                        <p className="font-bold text-zinc-900">{formatTreatmentProcedures(t.procedures)}</p>
                         <p className="text-zinc-600 mt-1">{t.description}</p>
                         <p className="text-[10px] text-zinc-400 mt-2 font-medium">Data: {parseDate(t.date).toLocaleDateString('pt-BR')}</p>
                       </div>
@@ -1311,20 +1308,64 @@ export function DentistPortal({
             </p>
           </div>
           
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium text-zinc-700">Tipo de Atendimento</label>
-            <select 
-              className="flex h-11 sm:h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-              value={treatmentForm.type}
-              onChange={e => setTreatmentForm({...treatmentForm, type: e.target.value as any})}
-            >
-              <option value="cleaning">Limpeza</option>
-              <option value="extraction">Extração</option>
-              <option value="filling">Obturação</option>
-              <option value="root-canal">Canal</option>
-              <option value="orthodontics">Ortodontia</option>
-              <option value="other">Outro</option>
-            </select>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-700">Procedimentos realizados</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {PROCEDURE_TYPES.map(({ code, label }) => {
+                const selected = treatmentForm.procedures.find(procedure => procedure.type === code);
+                return (
+                  <div key={code} className="rounded-lg border border-zinc-200 p-3 space-y-2">
+                    <label className="flex items-center gap-2 text-sm text-zinc-700">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(selected)}
+                        onChange={(event) => {
+                          const procedures = event.target.checked
+                            ? [...treatmentForm.procedures, { type: code, quantity: 1 }]
+                            : treatmentForm.procedures.filter(procedure => procedure.type !== code);
+                          setTreatmentForm({ ...treatmentForm, procedures });
+                        }}
+                      />
+                      {label}
+                    </label>
+                    {selected && (
+                      <Input
+                        label="Quantidade"
+                        type="number"
+                        min={1}
+                        step={1}
+                        required
+                        value={selected.quantity}
+                        onChange={(event) => setTreatmentForm({
+                          ...treatmentForm,
+                          procedures: treatmentForm.procedures.map(procedure =>
+                            procedure.type === code
+                              ? { ...procedure, quantity: Math.max(1, Number(event.target.value) || 1) }
+                              : procedure
+                          ),
+                        })}
+                      />
+                    )}
+                    {selected?.type === 'OUTRO' && (
+                      <Input
+                        label="Descrição"
+                        required
+                        value={selected.description || ''}
+                        onChange={(event) => setTreatmentForm({
+                          ...treatmentForm,
+                          procedures: treatmentForm.procedures.map(procedure =>
+                            procedure.type === code ? { ...procedure, description: event.target.value } : procedure
+                          ),
+                        })}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {treatmentForm.procedures.length === 0 && (
+              <p className="text-xs text-red-500">Selecione pelo menos um procedimento.</p>
+            )}
           </div>
 
           <div className="space-y-1.5">

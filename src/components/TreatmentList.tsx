@@ -7,7 +7,8 @@ import { Input } from './Input';
 import { Modal } from './Modal';
 import { cn } from '../lib/utils';
 import { parseDate } from '../lib/dateUtils';
-import { Treatment, Patient, Dentist, Appointment } from '../types';
+import { Treatment, TreatmentProcedure, Patient, Dentist, Appointment } from '../types';
+import { PROCEDURE_TYPES, formatTreatmentProcedures, ProcedureType } from '../constants';
 
 interface TreatmentListProps {
   treatments: Treatment[];
@@ -31,12 +32,19 @@ export function TreatmentList({
   const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    patientId: string;
+    dentistId: string;
+    appointmentId: string;
+    description: string;
+    procedures: TreatmentProcedure[];
+    date: string;
+  }>({
     patientId: '',
     dentistId: '',
     appointmentId: '',
     description: '',
-    type: 'Consultation',
+    procedures: [{ type: 'PROFILAXIA' as ProcedureType, quantity: 1 }],
     date: new Date().toISOString().split('T')[0],
   });
   const [patientSelectSearch, setPatientSelectSearch] = useState('');
@@ -74,25 +82,10 @@ export function TreatmentList({
   const getPatientName = (id: string) => getPatient(id)?.name || 'Paciente não encontrado';
   const getDentistName = (id: string) => dentists.find(d => d.id === id)?.name || 'Dentista não encontrado';
 
-  const translateType = (type: string) => {
-    const types: Record<string, string> = {
-      'Consultation': 'Consulta',
-      'Surgery': 'Cirurgia',
-      'Cleaning': 'Limpeza',
-      'Extraction': 'Extração',
-      'Filling': 'Restauração',
-      'Root Canal': 'Canal',
-      'Orthodontics': 'Ortodontia',
-      'X-Ray': 'Raio-X',
-      'Exam': 'Exame',
-      'Other': 'Outro'
-    };
-    return types[type] || type;
-  };
-
   const filteredTreatments = treatments.filter(t => 
     getPatientName(t.patientId).toLowerCase().includes(searchTerm.toLowerCase()) ||
-    t.description.toLowerCase().includes(searchTerm.toLowerCase())
+    t.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    formatTreatmentProcedures(t.procedures).toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const handleShowAnamnesis = (patientId: string) => {
@@ -109,6 +102,8 @@ export function TreatmentList({
     if (!formData.dentistId) newErrors.dentistId = 'Selecione um dentista';
     if (!formData.date) newErrors.date = 'Selecione uma data';
     if (formData.description.length < 5) newErrors.description = 'Descrição deve ter pelo menos 5 caracteres';
+    if (formData.procedures.length === 0) newErrors.procedures = 'Selecione pelo menos um procedimento';
+    if (formData.procedures.some(p => p.type === 'OUTRO' && !p.description?.trim())) newErrors.procedures = 'Descreva o procedimento Outro';
     
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -124,7 +119,7 @@ export function TreatmentList({
       dentistId: '', 
       appointmentId: '', 
       description: '', 
-      type: 'Consultation',
+      procedures: [{ type: 'PROFILAXIA', quantity: 1 }],
       date: new Date().toISOString().split('T')[0] 
     });
     setErrors({});
@@ -196,7 +191,7 @@ export function TreatmentList({
                     </td>
                     <td className="px-6 py-4">
                       <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 text-[10px] font-bold uppercase">
-                        {translateType(treatment.type || 'Consultation')}
+                        {formatTreatmentProcedures(treatment.procedures)}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm text-zinc-600">
@@ -233,7 +228,7 @@ export function TreatmentList({
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-600 text-[10px] font-bold uppercase">
-                    {translateType(treatment.type || 'Consultation')}
+                    {formatTreatmentProcedures(treatment.procedures)}
                   </span>
                   <button 
                     onClick={() => handleShowAnamnesis(treatment.patientId)}
@@ -265,7 +260,7 @@ export function TreatmentList({
             dentistId: '', 
             appointmentId: '', 
             description: '', 
-            type: 'Consultation',
+            procedures: [{ type: 'PROFILAXIA', quantity: 1 }],
             date: new Date().toISOString().split('T')[0] 
           });
         }} 
@@ -337,25 +332,60 @@ export function TreatmentList({
               error={errors.date}
               onChange={(e) => setFormData({ ...formData, date: e.target.value })}
             />
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-zinc-700">Tipo de Atendimento</label>
-              <select 
-                className="flex h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                required
-                value={formData.type}
-                onChange={(e) => setFormData({ ...formData, type: e.target.value })}
-              >
-                <option value="Consultation">Consulta</option>
-                <option value="Surgery">Cirurgia</option>
-                <option value="Cleaning">Limpeza</option>
-                <option value="Extraction">Extração</option>
-                <option value="Filling">Restauração</option>
-                <option value="Root Canal">Canal</option>
-                <option value="Orthodontics">Ortodontia</option>
-                <option value="X-Ray">Raio-X</option>
-                <option value="Exam">Exame</option>
-                <option value="Other">Outro</option>
-              </select>
+            <div className="space-y-2 sm:col-span-2">
+              <label className="text-sm font-medium text-zinc-700">Procedimentos</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {PROCEDURE_TYPES.map(({ code, label }) => {
+                  const selected = formData.procedures.find(procedure => procedure.type === code);
+                  return (
+                    <div key={code} className="rounded-lg border border-zinc-200 p-2 space-y-2">
+                      <label className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(selected)}
+                          onChange={(event) => setFormData({
+                            ...formData,
+                            procedures: event.target.checked
+                              ? [...formData.procedures, { type: code, quantity: 1 }]
+                              : formData.procedures.filter(procedure => procedure.type !== code),
+                          })}
+                        />
+                        {label}
+                      </label>
+                      {selected && (
+                        <Input
+                          label="Quantidade"
+                          type="number"
+                          min={1}
+                          value={selected.quantity}
+                          onChange={(event) => setFormData({
+                            ...formData,
+                            procedures: formData.procedures.map(procedure =>
+                              procedure.type === code
+                                ? { ...procedure, quantity: Math.max(1, Number(event.target.value) || 1) }
+                                : procedure
+                            ),
+                          })}
+                        />
+                      )}
+                      {selected?.type === 'OUTRO' && (
+                        <Input
+                          label="Descrição"
+                          required
+                          value={selected.description || ''}
+                          onChange={(event) => setFormData({
+                            ...formData,
+                            procedures: formData.procedures.map(procedure =>
+                              procedure.type === code ? { ...procedure, description: event.target.value } : procedure
+                            ),
+                          })}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              {errors.procedures && <p className="text-xs text-red-500">{errors.procedures}</p>}
             </div>
           </div>
           <Input 

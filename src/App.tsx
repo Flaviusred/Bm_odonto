@@ -35,6 +35,7 @@ import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStor
 import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField, orderBy, getDocs, writeBatch } from 'firebase/firestore';
 import { sendPasswordResetEmail, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { db, auth, createAuthUserWithSecondaryApp } from './firebase';
+import { normalizeTreatmentProcedures } from './constants';
 
 enum OperationType {
   CREATE = 'create',
@@ -359,7 +360,12 @@ export default function App() {
         const data = snapshot.docs.map(d => ({ ...d.data(), id: d.id } as any));
         if (name === 'users') {
           setter(normalizeUsersCollection(data));
-        } else {
+          } else if (name === 'treatments') {
+            setter(data.map((treatment) => ({
+              ...treatment,
+              procedures: normalizeTreatmentProcedures(treatment),
+            })));
+          } else {
           setter(data);
         }
         try { collectionsInitializedRef.current[name] = true; } catch (e) {}
@@ -393,7 +399,12 @@ export default function App() {
           rows.forEach((row) => merged.set(row.id, row));
         }
         const data = Array.from(merged.values());
-        setter(data);
+        setter(name === 'treatments'
+          ? data.map((treatment) => ({
+              ...treatment,
+              procedures: normalizeTreatmentProcedures(treatment),
+            }))
+          : data);
         try { collectionsInitializedRef.current[name] = true; } catch (e) {}
       };
 
@@ -1847,7 +1858,8 @@ export default function App() {
       ...data,
       id,
       createdAt: new Date().toISOString(),
-      patientAuthUid
+      patientAuthUid,
+      procedures: normalizeTreatmentProcedures(data),
     };
     try {
       await setDoc(doc(db, 'treatments', id), newTreatment);
@@ -1860,7 +1872,11 @@ export default function App() {
   const updateTreatment = async (updatedTreatment: Treatment) => {
     try {
       const patientAuthUid = updatedTreatment.patientAuthUid || getAuthUidForUserId(updatedTreatment.patientId) || null;
-      await setDoc(doc(db, 'treatments', updatedTreatment.id), { ...updatedTreatment, patientAuthUid }, { merge: true });
+      await setDoc(doc(db, 'treatments', updatedTreatment.id), {
+        ...updatedTreatment,
+        patientAuthUid,
+        procedures: normalizeTreatmentProcedures(updatedTreatment),
+      }, { merge: true });
       logAction('Edição', 'treatment', updatedTreatment.id, `Tratamento ${updatedTreatment.description} atualizado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, `treatments/${updatedTreatment.id}`);
