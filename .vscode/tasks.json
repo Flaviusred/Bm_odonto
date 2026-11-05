@@ -120,6 +120,24 @@
 			"problemMatcher": [
 				"$tsc"
 			]
+		},
+		{
+			"label": "Validate agenda attendance flow",
+			"type": "shell",
+			"command": "npm run lint",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			]
+		},
+		{
+			"label": "Build agenda attendance flow",
+			"type": "shell",
+			"command": "npm run build",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": []
 		}
 	]
 }

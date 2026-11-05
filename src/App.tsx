@@ -1867,6 +1867,7 @@ export default function App() {
       logAction('Criação', 'treatment', newTreatment.id, `Tratamento ${newTreatment.description} registrado.`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'treatments');
+      throw error;
     }
   };
 
@@ -2756,6 +2757,7 @@ export default function App() {
                   onUpdateStatus={updateAppointmentStatus}
                   onUpdateAppointment={updateAppointment}
                   onDeleteAppointment={deleteAppointment}
+                  onAddTreatment={addTreatment}
                   initialDentistId={selectedDentistId}
                 />
               )}
