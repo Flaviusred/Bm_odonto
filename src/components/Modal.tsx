@@ -13,7 +13,7 @@ interface ModalProps {
   closeOnBackdropClick?: boolean;
 }
 
-export function Modal({ isOpen, onClose, title, children, className, closeOnBackdropClick = true }: ModalProps) {
+export function Modal({ isOpen, onClose, title, children, className, closeOnBackdropClick = false }: ModalProps) {
   React.useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();

@@ -705,14 +705,9 @@ export function AgendaView({
                     if (!schedule) {
                       return (
                         <div className="col-span-3 sm:col-span-4 mt-1">
-                          <p className="text-xs text-zinc-500 mb-2">Dentista não atende neste dia. Insira o horário manualmente:</p>
-                          <Input 
-                            type="time" 
-                            required 
-                            value={formData.time}
-                            error={errors.time}
-                            onChange={(e) => setFormData({ ...formData, time: e.target.value })}
-                          />
+                          <p className="text-xs text-zinc-500">
+                            Dentista não possui horário configurado para este dia. Configure a agenda do dentista antes de agendar.
+                          </p>
                         </div>
                       );
                     }

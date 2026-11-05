@@ -34,6 +34,7 @@ export interface Patient {
   authUid?: string;
   createdAt: string;
   isActive: boolean;
+  password?: string;
   patientType: PatientType;
   securityType?: SecurityType; // Para quando for 'security'
   registrationNumber?: string; // Para CBMPB ou Segurança Pública

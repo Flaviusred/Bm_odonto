@@ -460,7 +460,28 @@ function PatientListContent({
         onClose={() => {
           setIsModalOpen(false);
           setEditingPatient(null);
-          setFormData({ name: '', email: '', phone: '', cpf: '', birthDate: '', address: '', anamnesis: '' });
+          setFormData({
+            name: '',
+            email: '',
+            phone: '',
+            cpf: '',
+            birthDate: '',
+            address: '',
+            anamnesis: '',
+            cep: '',
+            street: '',
+            number: '',
+            neighborhood: '',
+            city: '',
+            state: '',
+            patientType: 'civil',
+            securityType: '',
+            registrationNumber: '',
+            functionalCategory: '',
+            dependentOf: '',
+            parentesco: '',
+            password: '',
+          });
           setErrors({});
         }} 
         title={editingPatient ? "Editar Paciente" : "Novo Paciente"}
