@@ -178,7 +178,7 @@ export function InventoryManager({ inventory, movements, user, onUpdateInventory
         </div>
         <div className="flex gap-2">
           <Button 
-            variant={activeTab === 'stock' ? 'default' : 'outline'}
+            variant={activeTab === 'stock' ? 'primary' : 'outline'}
             onClick={() => setActiveTab('stock')}
             className="gap-2"
           >
@@ -186,7 +186,7 @@ export function InventoryManager({ inventory, movements, user, onUpdateInventory
             Estoque
           </Button>
           <Button 
-            variant={activeTab === 'movements' ? 'default' : 'outline'}
+            variant={activeTab === 'movements' ? 'primary' : 'outline'}
             onClick={() => setActiveTab('movements')}
             className="gap-2"
           >

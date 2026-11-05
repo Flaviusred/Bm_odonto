@@ -1232,6 +1232,13 @@ export function DentistPortal({
                     </select>
                   );
                 }
+                if (appointmentForm.date) {
+                  return (
+                    <p className="text-xs text-zinc-500">
+                      Sem agenda cadastrada para este dia. Configure o horário do dentista antes de agendar.
+                    </p>
+                  );
+                }
                 return (
                   <input
                     type="time"
@@ -1242,9 +1249,6 @@ export function DentistPortal({
                   />
                 );
               })()}
-              {appointmentForm.date && generateTimeSlotsForDate(appointmentForm.date).length === 0 && (
-                <p className="text-xs text-amber-600 mt-1">Sem agenda cadastrada para este dia. Insira o horário manualmente.</p>
-              )}
             </div>
           </div>
 

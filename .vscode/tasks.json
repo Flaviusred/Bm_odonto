@@ -18,6 +18,108 @@
 			"args": [],
 			"isBackground": false,
 			"problemMatcher": []
+		},
+		{
+			"label": "TypeScript lint after fixes",
+			"type": "shell",
+			"command": "npm run lint",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			]
+		},
+		{
+			"label": "Build after fixes",
+			"type": "shell",
+			"command": "npm run build",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Final TypeScript lint",
+			"type": "shell",
+			"command": "npm run lint",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			]
+		},
+		{
+			"label": "Verify schedule fixes",
+			"type": "shell",
+			"command": "npm run lint",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			]
+		},
+		{
+			"label": "Validate modal behavior",
+			"type": "shell",
+			"command": "npm run lint",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			]
+		},
+		{
+			"label": "Start BM Odonto local",
+			"type": "shell",
+			"command": "npm run dev",
+			"args": [],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Validate development configuration",
+			"type": "shell",
+			"command": "npm run lint",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			]
+		},
+		{
+			"label": "Rebuild frontend bundle",
+			"type": "shell",
+			"command": "npm run build",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Validate duplicate schedule fix",
+			"type": "shell",
+			"command": "npm run lint",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			]
+		},
+		{
+			"label": "Build duplicate schedule fix",
+			"type": "shell",
+			"command": "npm run build",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Final schedule validation",
+			"type": "shell",
+			"command": "npm run lint",
+			"args": [],
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			]
 		}
 	]
 }

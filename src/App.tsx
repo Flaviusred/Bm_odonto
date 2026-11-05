@@ -36,6 +36,7 @@ import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, quer
 import { sendPasswordResetEmail, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { db, auth, createAuthUserWithSecondaryApp } from './firebase';
 import { normalizeTreatmentProcedures } from './constants';
+import { normalizeDentistSchedules } from './lib/scheduleUtils';
 
 enum OperationType {
   CREATE = 'create',
@@ -1936,11 +1937,19 @@ export default function App() {
 
   const updateSchedules = async (newSchedules: DentistSchedule[]) => {
     try {
-      // This is a bit tricky since it's a bulk update in the UI but Firestore is doc-based.
-      // We'll update each schedule.
-      for (const schedule of newSchedules) {
+      const uniqueSchedules = Array.from(
+        new Map(newSchedules.map((schedule) => [`${schedule.dentistId}:${schedule.dayOfWeek}`, schedule])).values()
+      );
+      const retainedIds = new Set(uniqueSchedules.map((schedule) => schedule.id));
+      const removedSchedules = schedules.filter((schedule) => !retainedIds.has(schedule.id));
+
+      for (const schedule of removedSchedules) {
+        await deleteDoc(doc(db, 'schedules', schedule.id));
+      }
+      for (const schedule of uniqueSchedules) {
         await setDoc(doc(db, 'schedules', schedule.id), schedule, { merge: true });
       }
+      setSchedules(uniqueSchedules);
       logAction('Configuração de Agenda', 'dentist', undefined, 'Os horários de atendimento foram atualizados.');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'schedules');
@@ -2595,7 +2604,7 @@ export default function App() {
               onAddDocument={addDocument}
               onUpdateAppointmentStatus={updateAppointmentStatus}
               onUpdatePatient={updatePatient}
-              schedules={schedules}
+              schedules={normalizeDentistSchedules(schedules)}
               unseenCount={unseenCount}
               setUnseenCount={setUnseenCount}
               markAllNotificationsRead={markAllNotificationsRead}
@@ -2742,7 +2751,7 @@ export default function App() {
                   appointments={appointments}
                   patients={patients}
                   dentists={dentists}
-                  schedules={schedules}
+                  schedules={normalizeDentistSchedules(schedules)}
                   onAddAppointment={addAppointment}
                   onUpdateStatus={updateAppointmentStatus}
                   onUpdateAppointment={updateAppointment}
@@ -2755,7 +2764,7 @@ export default function App() {
                   dentists={dentists}
                   appointments={appointments}
                   patients={patients}
-                  schedules={schedules}
+                  schedules={normalizeDentistSchedules(schedules)}
                   onAddAppointment={addAppointment}
                   onUpdateSchedules={updateSchedules}
                 />
