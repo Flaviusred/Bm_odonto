@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Appointment, Patient, Dentist, DentistSchedule } from '../types';
+import { Appointment, Patient, Dentist, DentistSchedule, TreatmentProcedure } from '../types';
 import { Button } from './Button';
 import { Card, CardContent } from './Card';
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Plus, Search, UserRound, MessageCircle, CheckCircle2, XCircle, AlertCircle, Stethoscope, Clock, Calendar, ChevronDown, ChevronUp, CheckCircle, AlertTriangle } from 'lucide-react';
@@ -7,6 +7,7 @@ import { Modal } from './Modal';
 import { Input } from './Input';
 import { cn } from '../lib/utils';
 import { parseDate, formatDateLocal } from '../lib/dateUtils';
+import { PROCEDURE_TYPES } from '../constants';
 
 interface AgendaViewProps {
   appointments: Appointment[];
@@ -14,9 +15,17 @@ interface AgendaViewProps {
   dentists: Dentist[];
   schedules: DentistSchedule[];
   onAddAppointment: (appointment: Omit<Appointment, 'id' | 'createdAt'>) => void;
-  onUpdateStatus: (id: string, status: Appointment['status']) => void;
+  onUpdateStatus: (id: string, status: Appointment['status']) => Promise<void>;
   onUpdateAppointment: (appointment: Appointment) => void;
   onDeleteAppointment: (id: string) => void;
+  onAddTreatment: (treatment: {
+    patientId: string;
+    dentistId: string;
+    appointmentId: string;
+    description: string;
+    procedures: TreatmentProcedure[];
+    date: string;
+  }) => Promise<void>;
   initialDentistId?: string;
 }
 
@@ -29,6 +38,7 @@ export function AgendaView({
   onUpdateStatus,
   onUpdateAppointment,
   onDeleteAppointment,
+  onAddTreatment,
   initialDentistId = 'all',
 }: AgendaViewProps) {
   const [view, setView] = useState<'day' | 'week' | 'month'>('month');
@@ -50,6 +60,17 @@ export function AgendaView({
   const [editingAppointment, setEditingAppointment] = useState<Appointment | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [completeConfirm, setCompleteConfirm] = useState<Appointment | null>(null);
+  const [treatmentAppointment, setTreatmentAppointment] = useState<Appointment | null>(null);
+  const [treatmentErrors, setTreatmentErrors] = useState<Record<string, string>>({});
+  const [treatmentForm, setTreatmentForm] = useState<{
+    description: string;
+    procedures: TreatmentProcedure[];
+    date: string;
+  }>({
+    description: '',
+    procedures: [{ type: 'PROFILAXIA', quantity: 1 }],
+    date: formatDateLocal(new Date()),
+  });
   const [aptActionSuccess, setAptActionSuccess] = useState<{ type: 'completed' | 'rescheduled'; patientName: string } | null>(null);
   const [formData, setFormData] = useState({
     patientId: '',
@@ -92,6 +113,53 @@ export function AgendaView({
   const getPatient = (id: string) => patients.find(p => p.id === id);
   const getPatientName = (id: string) => getPatient(id)?.name || 'Paciente não encontrado';
   const getDentistName = (id: string) => dentists.find(d => d.id === id)?.name || 'Dentista não encontrado';
+
+  const openTreatmentForm = (appointment: Appointment) => {
+    setTreatmentAppointment(appointment);
+    setTreatmentErrors({});
+    setTreatmentForm({
+      description: '',
+      procedures: [{ type: 'PROFILAXIA', quantity: 1 }],
+      date: appointment.date,
+    });
+  };
+
+  const handleRegisterTreatment = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!treatmentAppointment) return;
+
+    const errors: Record<string, string> = {};
+    if (treatmentForm.description.trim().length < 5) {
+      errors.description = 'Descrição deve ter pelo menos 5 caracteres';
+    }
+    if (treatmentForm.procedures.length === 0) {
+      errors.procedures = 'Selecione pelo menos um procedimento';
+    }
+    if (treatmentForm.procedures.some((procedure) => procedure.type === 'OUTRO' && !procedure.description?.trim())) {
+      errors.procedures = 'Descreva o procedimento Outro';
+    }
+    if (Object.keys(errors).length > 0) {
+      setTreatmentErrors(errors);
+      return;
+    }
+
+    try {
+      await onAddTreatment({
+        patientId: treatmentAppointment.patientId,
+        dentistId: treatmentAppointment.dentistId,
+        appointmentId: treatmentAppointment.id,
+        description: treatmentForm.description.trim(),
+        procedures: treatmentForm.procedures,
+        date: treatmentForm.date,
+      });
+      await onUpdateStatus(treatmentAppointment.id, 'completed');
+      setTreatmentAppointment(null);
+      setTreatmentErrors({});
+      setAptActionSuccess({ type: 'completed', patientName: getPatientName(treatmentAppointment.patientId) });
+    } catch {
+      setTreatmentErrors({ form: 'Não foi possível registrar o atendimento. Tente novamente.' });
+    }
+  };
 
   const handleWhatsAppReminder = (apt: Appointment) => {
     const patient = getPatient(apt.patientId);
@@ -814,16 +882,108 @@ export function AgendaView({
               className="bg-emerald-600 hover:bg-emerald-700 text-white"
               onClick={() => {
                 if (!completeConfirm) return;
-                const patientName = getPatientName(completeConfirm.patientId);
-                onUpdateStatus(completeConfirm.id, 'completed');
+                openTreatmentForm(completeConfirm);
                 setCompleteConfirm(null);
-                setAptActionSuccess({ type: 'completed', patientName });
               }}
             >
-              Concluir
+              Registrar Atendimento
             </Button>
           </div>
         </div>
+      </Modal>
+
+      <Modal
+        isOpen={!!treatmentAppointment}
+        onClose={() => setTreatmentAppointment(null)}
+        title="Registrar Atendimento"
+      >
+        <form onSubmit={handleRegisterTreatment} className="space-y-4">
+          <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
+            <p className="text-sm font-bold text-emerald-900">
+              Paciente: {treatmentAppointment ? getPatientName(treatmentAppointment.patientId) : ''}
+            </p>
+            <p className="mt-1 text-xs text-emerald-700">
+              Consulta em {treatmentAppointment ? parseDate(treatmentAppointment.date).toLocaleDateString('pt-BR') : ''} às {treatmentAppointment?.time}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-700">Procedimentos realizados</label>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {PROCEDURE_TYPES.map(({ code, label }) => {
+                const selected = treatmentForm.procedures.find((procedure) => procedure.type === code);
+                return (
+                  <div key={code} className="space-y-2 rounded-lg border border-zinc-200 p-3">
+                    <label className="flex items-center gap-2 text-sm text-zinc-700">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(selected)}
+                        onChange={(event) => setTreatmentForm({
+                          ...treatmentForm,
+                          procedures: event.target.checked
+                            ? [...treatmentForm.procedures, { type: code, quantity: 1 }]
+                            : treatmentForm.procedures.filter((procedure) => procedure.type !== code),
+                        })}
+                      />
+                      {label}
+                    </label>
+                    {selected && (
+                      <Input
+                        label="Quantidade"
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={selected.quantity}
+                        onChange={(event) => setTreatmentForm({
+                          ...treatmentForm,
+                          procedures: treatmentForm.procedures.map((procedure) =>
+                            procedure.type === code
+                              ? { ...procedure, quantity: Math.max(1, Number(event.target.value) || 1) }
+                              : procedure
+                          ),
+                        })}
+                      />
+                    )}
+                    {selected?.type === 'OUTRO' && (
+                      <Input
+                        label="Descrição"
+                        required
+                        value={selected.description || ''}
+                        onChange={(event) => setTreatmentForm({
+                          ...treatmentForm,
+                          procedures: treatmentForm.procedures.map((procedure) =>
+                            procedure.type === code ? { ...procedure, description: event.target.value } : procedure
+                          ),
+                        })}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {treatmentErrors.procedures && <p className="text-xs text-red-500">{treatmentErrors.procedures}</p>}
+          </div>
+
+          <Input
+            label="Descrição do Atendimento"
+            required
+            value={treatmentForm.description}
+            error={treatmentErrors.description}
+            onChange={(event) => setTreatmentForm({ ...treatmentForm, description: event.target.value })}
+          />
+          <Input
+            label="Data do Atendimento"
+            type="date"
+            required
+            value={treatmentForm.date}
+            onChange={(event) => setTreatmentForm({ ...treatmentForm, date: event.target.value })}
+          />
+          {treatmentErrors.form && <p className="text-sm text-red-600">{treatmentErrors.form}</p>}
+          <div className="flex justify-end gap-3">
+            <Button type="button" variant="outline" onClick={() => setTreatmentAppointment(null)}>Cancelar</Button>
+            <Button type="submit">Salvar Atendimento</Button>
+          </div>
+        </form>
       </Modal>
 
       {/* Sucesso: realizado ou remarcado */}
