@@ -13,11 +13,12 @@ interface DentistListProps {
   onAddDentist: (dentist: Omit<Dentist, 'id' | 'createdAt' | 'isActive'>) => void;
   onDeleteDentist: (id: string) => void;
   onUpdateDentist: (dentist: Dentist) => void;
+  onChangeDentistPassword: (dentist: Dentist, password: string) => Promise<void>;
   onTabChange: (tab: string) => void;
   onSelectDentist: (id: string) => void;
 }
 
-export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateDentist, onTabChange, onSelectDentist }: DentistListProps) {
+export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateDentist, onChangeDentistPassword, onTabChange, onSelectDentist }: DentistListProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [editingDentist, setEditingDentist] = useState<Dentist | null>(null);
@@ -25,7 +26,10 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
   const selectedDentistDetails = selectedDentistId ? dentists.find(d => d.id === selectedDentistId) || null : null;
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [confirmAction, setConfirmAction] = useState<{ type: 'disable' | 'password', dentist: Dentist } | null>(null);
-  const [generatedPassword, setGeneratedPassword] = useState<{ password: string, email: string } | null>(null);
+  const [generatedPassword, setGeneratedPassword] = useState<string | null>(null);
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -92,26 +96,51 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
   };
 
   const handleDisable = (dentist: Dentist) => {
+    setActionError(null);
     setConfirmAction({ type: 'disable', dentist });
   };
 
   const handleGeneratePassword = (dentist: Dentist) => {
+    setActionError(null);
     setConfirmAction({ type: 'password', dentist });
   };
 
-  const executeAction = () => {
-    if (!confirmAction) return;
+  const executeAction = async () => {
+    if (!confirmAction || isChangingPassword) return;
     if (confirmAction.type === 'disable') {
       onUpdateDentist({ ...confirmAction.dentist, isActive: !confirmAction.dentist.isActive });
-    } else {
-      const newPassword = Math.random().toString(36).substr(2, 8);
-      setGeneratedPassword({ password: newPassword, email: confirmAction.dentist.email });
-      
-      // Update the dentist's password in the main users list
-      // We need to pass this up to App.tsx
-      onUpdateDentist({ ...confirmAction.dentist, password: newPassword });
+      setConfirmAction(null);
+      return;
     }
-    setConfirmAction(null);
+
+    setIsChangingPassword(true);
+    setActionError(null);
+    try {
+      const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+      const randomValues = crypto.getRandomValues(new Uint8Array(12));
+      const newPassword = Array.from(randomValues, value => alphabet[value % alphabet.length]).join('');
+      await onChangeDentistPassword(confirmAction.dentist, newPassword);
+      setCopied(false);
+      setGeneratedPassword(newPassword);
+      setConfirmAction(null);
+    } catch (error) {
+      console.error('Falha ao atualizar senha do dentista:', error);
+      const message = error instanceof Error ? error.message : 'Erro inesperado.';
+      setActionError(`Não foi possível confirmar a atualização da senha: ${message} A senha pode ter sido alterada; tente gerar outra.`);
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  const handleCopyPassword = async () => {
+    if (!generatedPassword) return;
+    try {
+      await navigator.clipboard.writeText(generatedPassword);
+      setCopied(true);
+    } catch (error) {
+      console.error('Falha ao copiar senha:', error);
+      setActionError('Não foi possível copiar a senha. Selecione e copie manualmente.');
+    }
   };
 
   const handleViewAgenda = (dentist: Dentist) => {
@@ -259,14 +288,15 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
       </Modal>
       <Modal 
         isOpen={!!confirmAction} 
-        onClose={() => setConfirmAction(null)} 
+        onClose={() => { if (!isChangingPassword) setConfirmAction(null); }}
         title={confirmAction?.type === 'disable' ? "Confirmar Ação" : "Confirmar Geração de Senha"}
       >
         <div className="space-y-4">
           <p>Tem certeza que deseja {confirmAction?.type === 'disable' ? (confirmAction.dentist.isActive ? 'desabilitar' : 'habilitar') : 'gerar uma nova senha para'} {confirmAction?.dentist.name}?</p>
+          {actionError && <p role="alert" className="text-sm text-red-600">{actionError}</p>}
           <div className="flex justify-end gap-3">
-            <Button variant="outline" onClick={() => setConfirmAction(null)}>Cancelar</Button>
-            <Button onClick={executeAction}>Confirmar</Button>
+            <Button variant="outline" disabled={isChangingPassword} onClick={() => setConfirmAction(null)}>Cancelar</Button>
+            <Button disabled={isChangingPassword} onClick={executeAction}>{isChangingPassword ? 'Atualizando...' : 'Confirmar'}</Button>
           </div>
         </div>
       </Modal>
@@ -274,15 +304,19 @@ export function DentistList({ dentists, onAddDentist, onDeleteDentist, onUpdateD
       <Modal 
         isOpen={!!generatedPassword} 
         onClose={() => setGeneratedPassword(null)} 
-        title="Nova Senha Gerada"
+        title="Senha Gerada com Sucesso"
       >
         <div className="space-y-4">
-          <p>A nova senha foi gerada e enviada para o e-mail: <strong>{generatedPassword?.email}</strong></p>
-          <div className="flex items-center gap-2 p-3 bg-zinc-100 rounded-lg">
-            <code className="flex-1 font-mono text-lg">{generatedPassword?.password}</code>
-            <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(generatedPassword?.password || '')}>Copiar</Button>
+          <div className="p-4 bg-emerald-50 text-emerald-900 rounded-xl border border-emerald-100 text-center">
+            <p className="text-sm mb-2">{copied ? 'Senha copiada!' : 'A nova senha é:'}</p>
+            <p className="text-2xl font-mono font-bold tracking-wider select-all">{generatedPassword}</p>
           </div>
-          <Button className="w-full" onClick={() => setGeneratedPassword(null)}>Fechar</Button>
+          <p className="text-sm text-zinc-500 text-center">A senha foi atualizada no cadastro do usuário. Ela não é enviada por e-mail.</p>
+          {actionError && <p role="alert" className="text-sm text-red-600">{actionError}</p>}
+          <div className="flex justify-between gap-2">
+            <Button variant="outline" onClick={() => setGeneratedPassword(null)}>Fechar</Button>
+            <Button onClick={handleCopyPassword}>Copiar Senha</Button>
+          </div>
         </div>
       </Modal>
     </>

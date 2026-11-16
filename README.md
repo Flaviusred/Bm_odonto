@@ -196,6 +196,8 @@ sudo ln -s /etc/nginx/sites-available/bm-odonto /etc/nginx/sites-enabled/
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
+Se a recuperação de senha retornar HTTP 503, verifique a resposta na aba Network do navegador e os logs do proxy e do processo Express (`pm2 logs bm-odonto`). A rota `/api/forgot-password` retorna 500 para erros internos, portanto um 503 pode vir do proxy ou de outro serviço. Confirme se o backend está ativo, se o proxy encaminha `/bravoOdonto/api/` para o Express e se `VITE_API_URL`, definido no momento do build quando necessário, aponta para o backend correto. Se a requisição chegar ao Express, investigue nos logs a conexão com Firestore e a configuração de e-mail. Não compartilhe credenciais nem dados pessoais ao solicitar suporte.
+
 ### 5. Atualizar após novo deploy
 
 ```bash
@@ -232,3 +234,4 @@ O CI/CD via GitHub Actions faz o deploy automaticamente a cada push na branch `m
 
 Permissões extras podem ser atribuídas individualmente a dentistas e atendentes pelo administrador.
 
+Na ficha do dentista, **Nova Senha** atualiza a conta vinculada na gestão de usuários pelo mesmo endpoint administrativo de autenticação. A senha é exibida para cópia somente após a confirmação da API; ela não é enviada por e-mail. A operação requer uma sessão de administrador e um usuário de dentista vinculado.
