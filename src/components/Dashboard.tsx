@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { 
   Users, 
   Calendar, 
@@ -58,14 +58,39 @@ const PATIENT_TYPE_LABELS: Record<string, string> = {
   civil: 'Civil',
 };
 
+function MeasuredChart({ children }: { children: ReactNode }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const updateSize = () => {
+      const { width, height } = container.getBoundingClientRect();
+      setSize({ width: Math.round(width), height: Math.round(height) });
+    };
+
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div ref={containerRef} className="h-full w-full min-w-0">
+      {size.width > 0 && size.height > 0 && (
+        <ResponsiveContainer width={size.width} height={size.height}>
+          {children}
+        </ResponsiveContainer>
+      )}
+    </div>
+  );
+}
+
 export function Dashboard({ patients, appointments, treatments, dentists, view = 'overview' }: DashboardProps) {
-  const [chartsReady, setChartsReady] = useState(false);
   const [selectedPeriod, setSelectedPeriod] = useState<PeriodKey>('30d');
   const [procedureGrouping, setProcedureGrouping] = useState<ProcedureGrouping>('day');
-  useEffect(() => {
-    const id = requestAnimationFrame(() => setChartsReady(true));
-    return () => cancelAnimationFrame(id);
-  }, []);
 
   const today = new Date();
   const todayStr = today.toISOString().split('T')[0];
@@ -300,8 +325,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
             </CardTitle>
           </CardHeader>
           <CardContent className="h-[300px]">
-            {!chartsReady ? <div className="h-full w-full" /> : (
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+            <MeasuredChart>
               <AreaChart data={chartData}>
                 <defs>
                   <linearGradient id="colorApp" x1="0" y1="0" x2="0" y2="1">
@@ -317,8 +341,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
                 />
                 <Area type="monotone" dataKey="appointments" stroke="#10b981" fillOpacity={1} fill="url(#colorApp)" strokeWidth={2} />
               </AreaChart>
-            </ResponsiveContainer>
-            )}
+            </MeasuredChart>
           </CardContent>
         </Card>
 
@@ -398,8 +421,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
             </CardTitle>
           </CardHeader>
           <CardContent className="h-[300px]">
-            {!chartsReady ? <div className="h-full w-full" /> : (
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+            <MeasuredChart>
               <PieChart>
                 <Pie data={statusData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} fill="#8884d8" label>
                   {statusData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
@@ -407,8 +429,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
                 <Tooltip />
                 <Legend />
               </PieChart>
-            </ResponsiveContainer>
-            )}
+            </MeasuredChart>
           </CardContent>
         </Card>
         )}
@@ -442,8 +463,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
               <p className="text-3xl font-bold text-emerald-700">{procedureQuantityTotal}</p>
             </div>
             <div className="h-[320px]">
-              {!chartsReady ? <div className="h-full w-full" /> : (
-                <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+                <MeasuredChart>
                   <BarChart data={procedureQuantityData}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                     <XAxis dataKey="period" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#64748b' }} />
@@ -451,8 +471,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
                     <Tooltip />
                     <Bar dataKey="total" name="Procedimentos" fill="#10b981" radius={[4, 4, 0, 0]} />
                   </BarChart>
-                </ResponsiveContainer>
-              )}
+                </MeasuredChart>
             </div>
           </CardContent>
         </Card>
@@ -469,8 +488,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
             </CardTitle>
           </CardHeader>
           <CardContent className="h-[300px]">
-            {!chartsReady ? <div className="h-full w-full" /> : (
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+            <MeasuredChart>
               <BarChart data={attendedByPatientType}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} />
@@ -478,8 +496,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
                 <Tooltip />
                 <Bar dataKey="value" fill="#10b981" radius={[4, 4, 0, 0]} />
               </BarChart>
-            </ResponsiveContainer>
-            )}
+            </MeasuredChart>
           </CardContent>
         </Card>
 
@@ -493,8 +510,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
             </CardTitle>
           </CardHeader>
           <CardContent className="h-[300px]">
-            {!chartsReady ? <div className="h-full w-full" /> : (
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+            <MeasuredChart>
               <BarChart data={dentistData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} />
@@ -502,8 +518,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
                 <Tooltip />
                 <Bar dataKey="value" fill="#3b82f6" radius={[4, 4, 0, 0]} />
               </BarChart>
-            </ResponsiveContainer>
-            )}
+            </MeasuredChart>
           </CardContent>
         </Card>
         )}
@@ -520,8 +535,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
             </CardTitle>
           </CardHeader>
           <CardContent className="h-[400px]">
-            {!chartsReady ? <div className="h-full w-full" /> : (
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+            <MeasuredChart>
               <PieChart>
                 <Pie data={statusData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={130} fill="#8884d8" label>
                   {statusData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
@@ -529,8 +543,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
                 <Tooltip />
                 <Legend />
               </PieChart>
-            </ResponsiveContainer>
-            )}
+            </MeasuredChart>
           </CardContent>
         </Card>
       )}
@@ -545,8 +558,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
             </CardTitle>
           </CardHeader>
           <CardContent className="h-[400px]">
-            {!chartsReady ? <div className="h-full w-full" /> : (
-            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
+            <MeasuredChart>
               <BarChart data={dentistData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: '#64748b' }} />
@@ -554,8 +566,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
                 <Tooltip />
                 <Bar dataKey="value" fill="#3b82f6" radius={[4, 4, 0, 0]} />
               </BarChart>
-            </ResponsiveContainer>
-            )}
+            </MeasuredChart>
           </CardContent>
         </Card>
       )}

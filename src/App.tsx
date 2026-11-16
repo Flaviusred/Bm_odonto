@@ -1442,6 +1442,20 @@ export default function App() {
     }
   };
 
+  const changeDentistPassword = async (dentist: Dentist, password: string) => {
+    const email = dentist.email.trim().toLowerCase();
+    const linkedUser = users.find((candidate) =>
+      candidate.role === 'dentist' && email !== '' && candidate.email.trim().toLowerCase() === email
+    ) || users.find((candidate) => candidate.role === 'dentist' && candidate.id === dentist.id);
+
+    if (!linkedUser) {
+      throw new Error('Usuário vinculado ao dentista não encontrado. Verifique o cadastro na gestão de usuários.');
+    }
+
+    await syncAuthPassword(linkedUser.id, password, linkedUser.email);
+    void logAction('Edição', 'dentist', dentist.id, `Senha do dentista ${dentist.name} atualizada.`);
+  };
+
   // Attendant Handlers
   const addAttendant = async (data: Omit<Attendant, 'id' | 'createdAt' | 'isActive'>) => {
     const baseId = safeRandomUUID().replace(/-/g,"").substring(0,9);
@@ -2024,6 +2038,9 @@ export default function App() {
         });
 
         if (!response.ok) {
+          if (response.status === 503) {
+            throw new Error('O serviço de recuperação de senha está temporariamente indisponível. Tente novamente mais tarde ou entre em contato com o suporte.');
+          }
           const errorData = await response.json().catch(() => ({}));
           throw new Error(errorData.error || 'Falha ao iniciar a recuperação de senha.');
         }
@@ -2849,6 +2866,7 @@ export default function App() {
                   onAddDentist={addDentist}
                   onDeleteDentist={deleteDentist}
                   onUpdateDentist={updateDentist}
+                  onChangeDentistPassword={changeDentistPassword}
                   onTabChange={setActiveTab}
                   onSelectDentist={setSelectedDentistId}
                 />
