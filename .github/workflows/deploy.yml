@@ -40,7 +40,7 @@ jobs:
         env:
           FIREBASE_PROJECT: ${{ secrets.FIREBASE_PROJECT }}
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-        run: npx firebase-tools@latest deploy --project "$FIREBASE_PROJECT" --token "$FIREBASE_TOKEN" --only hosting
+        run: npx firebase-tools@latest deploy --project "$FIREBASE_PROJECT" --token "$FIREBASE_TOKEN" --only hosting,storage
 
       - name: Deploy Firestore Rules (named database)
         env:

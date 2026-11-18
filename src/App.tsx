@@ -1899,20 +1899,25 @@ export default function App() {
     }
   };
 
-  const addDocument = async (data: Omit<PatientDocument, 'id' | 'uploadedAt'>) => {
-    const id = safeRandomUUID().replace(/-/g,"").substring(0,9);
-    const patientAuthUid = getAuthUidForUserId(data.patientId) || null;
-    const newDoc: PatientDocument = {
-      ...data,
-      id,
-      uploadedAt: new Date().toISOString(),
-      patientAuthUid
-    };
+  const addDocument = async (data: Omit<PatientDocument, 'id' | 'uploadedAt' | 'url' | 'storagePath'> & { file: File }) => {
     try {
-      await setDoc(doc(db, 'documents', id), newDoc);
+      if (!auth.currentUser) throw new Error('Faça login novamente para enviar documentos.');
+      const token = await auth.currentUser.getIdToken();
+      const params = new URLSearchParams({ patientId: data.patientId, name: data.name, type: data.type });
+      const response = await fetch(`${API_BASE}/api/documents?${params}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/pdf' },
+        body: data.file,
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => null);
+        throw new Error(result?.error || `Falha ao enviar o documento (HTTP ${response.status}).`);
+      }
       logAction('Upload de Documento', 'patient', data.patientId, `Documento ${data.name} enviado.`);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'documents');
+      console.error('Falha ao enviar documento:', error);
+      toast.error(error instanceof Error ? error.message : 'Falha ao enviar o arquivo.');
+      throw error;
     }
   };
 

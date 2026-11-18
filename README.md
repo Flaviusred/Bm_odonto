@@ -221,6 +221,18 @@ O CI/CD via GitHub Actions faz o deploy automaticamente a cada push na branch `m
 | `FIREBASE_TOKEN` | Token gerado com `firebase login:ci` |
 | `VITE_SITE_URL` | URL pública do site |
 
+### Documentos do prontuário (Firebase Storage)
+
+Os PDFs (até 2 MB) são enviados pelo Express e armazenados no Firebase Storage em `secure-patient-documents/{id}.pdf`. O servidor verifica o token do Firebase Auth e o perfil no Firestore para autorizar o upload; na leitura, também permite o acesso ao paciente vinculado. O vínculo confiável do arquivo fica na coleção `document_files`, inacessível aos clientes pelas regras do Firestore. Novos arquivos não usam URLs públicas de download.
+
+O Storage deve estar habilitado e o servidor deve ter credenciais Firebase Admin com acesso ao Auth, ao banco Firestore configurado e ao bucket. Em desenvolvimento, configure `FIREBASE_SERVICE_ACCOUNT` ou `GOOGLE_APPLICATION_CREDENTIALS` em `.env.local` (não versionado) com um caminho válido para a máquina local. O login na Firebase CLI não configura automaticamente essas credenciais. Reinicie o servidor após alterar a configuração.
+
+Publique o servidor Express e o frontend para ativar a mudança. As regras do Storage continuam em `storage.rules`; o acesso direto ao novo caminho não é permitido. Arquivos armazenados anteriormente com URLs de download continuam usando essas URLs e não são migrados automaticamente; quem possuir uma URL com token pode acessá-la.
+
+Documentos enviados antes desta mudança (URL `blob:`) não podem ser recuperados; na lista aparecem como "Arquivo indisponível" / "Reenviar" e exigem novo upload.
+
+Administradores, atendentes e dentistas podem excluir documentos após confirmação. O Express remove o arquivo do Storage e os registros do Firestore; documentos antigos em `blob:` ou `data:` têm apenas o registro removido. Arquivos externos sem caminho de Storage identificado não são excluídos automaticamente.
+
 ---
 
 ## Permissões e roles
