@@ -1,0 +1,20 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isStaff() {
+      return request.auth != null
+        && firestore.exists(/databases/ai-studio-f268cd8f-e6a5-4bba-b421-df1c4dc1d11c/documents/users/$(request.auth.uid))
+        && firestore.get(/databases/ai-studio-f268cd8f-e6a5-4bba-b421-df1c4dc1d11c/documents/users/$(request.auth.uid)).data.role in ['admin', 'attendant', 'dentist'];
+    }
+
+    // patient-documents/{patientAuthUid}/{arquivo}.pdf
+    match /patient-documents/{ownerUid}/{fileName} {
+      allow read: if request.auth != null && (isStaff() || request.auth.uid == ownerUid);
+      allow create: if request.auth != null
+        && (isStaff() || request.auth.uid == ownerUid)
+        && request.resource.contentType == 'application/pdf'
+        && request.resource.size <= 2 * 1024 * 1024;
+      allow update, delete: if isStaff();
+    }
+  }
+}

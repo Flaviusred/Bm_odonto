@@ -1,18 +1,19 @@
-import { useState, useRef, Component } from 'react';
+import { useState, Component } from 'react';
 import React from 'react';
 import { Plus, Search, MoreVertical, Edit2, Trash2, Phone, Mail, Calendar, History, ChevronDown, ChevronUp, Stethoscope, UserRound, Award, Users, CornerDownRight, ArrowLeft, FileUp, Upload, FileText, CheckCircle, AlertTriangle } from 'lucide-react';
 import { Button } from './Button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './Card';
 import { Input } from './Input';
 import { Modal } from './Modal';
+import { DeleteDocumentButton } from './DeleteDocumentButton';
 import { Patient, Appointment, Treatment, Dentist, PatientType, PatientDocument } from '../types';
 import { patientService } from '../services/patientService';
 import { cn, validateCPF, maskCPF, maskPhone, maskCEP } from '../lib/utils';
 import { formatDateDDMMYYYY, formatDateLocal, parseDate, parseDateTime } from '../lib/dateUtils';
 import { formatTreatmentProcedures } from '../constants';
 
-const DOCUMENT_MAX_MB = 1;
-const DOCUMENT_MAX_BYTES = DOCUMENT_MAX_MB * 1024 * 1024;
+import { DOCUMENT_MAX_MB, DOCUMENT_MAX_BYTES, LEGACY_DOCUMENT_MESSAGE, isLegacyUnavailableDocument, openStoredDocument } from '../lib/documentUtils';
+
 const DOCUMENT_ALLOWED_TYPES = ['application/pdf'];
 
 interface PatientListProps {
@@ -24,7 +25,7 @@ interface PatientListProps {
   onAddPatient: (patient: Omit<Patient, 'id' | 'createdAt' | 'isActive'> & { id?: string }) => void;
   onDeletePatient: (id: string) => void;
   onUpdatePatient: (patient: Patient) => void;
-  onAddDocument: (doc: Omit<PatientDocument, 'id' | 'uploadedAt'>) => void;
+  onAddDocument: (doc: Omit<PatientDocument, 'id' | 'uploadedAt' | 'url' | 'storagePath'> & { file: File }) => Promise<void>;
   onTabChange?: (tab: string) => void;
 }
 
@@ -94,11 +95,18 @@ function PatientListContent({
     type: 'Documento',
     file: null,
   });
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const closeUploadModal = () => {
+    if (isUploading) return;
+    setIsUploadModalOpen(false);
+    setUploadForm({ name: '', type: 'Documento', file: null });
+    setErrors({});
+  };
 
-  const handleUpload = (e: React.FormEvent) => {
+  const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPatientDetails || !uploadForm.file) {
+      setErrors({ upload: 'Selecione um arquivo para upload.' });
       return;
     }
 
@@ -112,14 +120,20 @@ function PatientListContent({
       return;
     }
 
-    const fileUrl = URL.createObjectURL(uploadForm.file);
-
-    onAddDocument({
-      patientId: selectedPatientDetails.id,
-      name: uploadForm.name || uploadForm.file.name,
-      type: uploadForm.type,
-      url: fileUrl,
-    });
+    setIsUploading(true);
+    try {
+      await onAddDocument({
+        patientId: selectedPatientDetails.id,
+        name: uploadForm.name || uploadForm.file.name,
+        type: uploadForm.type,
+        file: uploadForm.file,
+      });
+    } catch {
+      setErrors({ upload: 'Falha ao enviar o arquivo. Tente novamente.' });
+      return;
+    } finally {
+      setIsUploading(false);
+    }
 
     setIsUploadModalOpen(false);
     setUploadForm({ name: '', type: 'Documento', file: null });
@@ -773,7 +787,7 @@ function PatientListContent({
 
       <Modal
         isOpen={isUploadModalOpen}
-        onClose={() => { setIsUploadModalOpen(false); setErrors({}); }}
+        onClose={closeUploadModal}
         title="Upload de Documento"
       >
         <form onSubmit={handleUpload} className="space-y-4">
@@ -790,24 +804,26 @@ function PatientListContent({
               <option value="Raio-X">Raio-X</option>
             </select>
           </div>
-          <div className="border-2 border-dashed border-zinc-200 rounded-xl p-8 text-center bg-zinc-50 cursor-pointer hover:bg-zinc-100 transition-colors" onClick={() => fileInputRef.current?.click()}>
+          <label className="block border-2 border-dashed border-zinc-200 rounded-xl p-8 text-center bg-zinc-50 cursor-pointer hover:bg-zinc-100 transition-colors">
             <input
               type="file"
-              ref={fileInputRef}
-              className="hidden"
+              className="sr-only"
               accept="application/pdf"
-              onChange={e => setUploadForm({ ...uploadForm, file: e.target.files?.[0] || null })}
+              onChange={e => {
+                const file = e.target.files?.[0] || null;
+                setUploadForm(current => ({ ...current, file }));
+              }}
             />
             <Upload className="h-8 w-8 text-zinc-400 mx-auto mb-2" />
             <p className="text-sm font-medium text-zinc-700">
-              {uploadForm.file ? uploadForm.file.name : 'Clique ou arraste o arquivo aqui'}
+              {uploadForm.file ? `Arquivo selecionado: ${uploadForm.file.name}` : 'Clique para selecionar um arquivo'}
             </p>
             <p className="text-xs text-zinc-400 mt-1">Apenas PDF, até {DOCUMENT_MAX_MB}MB</p>
-          </div>
+          </label>
           {errors.upload && <p className="text-xs text-red-500">{errors.upload}</p>}
           <div className="flex flex-col sm:flex-row justify-end gap-3 pt-2">
-            <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={() => { setIsUploadModalOpen(false); setErrors({}); }}>Cancelar</Button>
-            <Button type="submit" className="w-full sm:w-auto">Salvar Documento</Button>
+            <Button type="button" variant="outline" disabled={isUploading} className="w-full sm:w-auto" onClick={closeUploadModal}>Cancelar</Button>
+            <Button type="submit" disabled={isUploading} className="w-full sm:w-auto">{isUploading ? 'Enviando...' : 'Salvar Documento'}</Button>
           </div>
         </form>
       </Modal>
@@ -958,19 +974,31 @@ function PatientListContent({
               </CardHeader>
               <CardContent className="space-y-3">
                 {documents.filter(d => d.patientId === selectedPatientDetails.id).map(docItem => (
-                  <a
-                    key={docItem.id}
-                    href={docItem.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-3 p-3 rounded-lg border border-zinc-100 bg-zinc-50/50 hover:bg-zinc-100 transition-colors"
+                  <div key={docItem.id} className="flex items-center rounded-lg border border-zinc-100 bg-zinc-50/50">
+                  <button
+                    type="button"
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      try {
+                        if (!await openStoredDocument(docItem)) alert(LEGACY_DOCUMENT_MESSAGE);
+                      } catch (error) {
+                        console.error('Falha ao abrir documento:', error);
+                        alert(error instanceof Error ? error.message : 'Falha ao abrir o documento.');
+                      }
+                    }}
+                    className="min-w-0 flex-1 text-left flex items-center gap-3 p-3 rounded-lg hover:bg-zinc-100 transition-colors cursor-pointer"
                   >
                     <FileText className="h-4 w-4 text-emerald-500 shrink-0" />
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium text-zinc-900 truncate">{docItem.name}</p>
                       <p className="text-xs text-zinc-500">{docItem.type}</p>
+                      {isLegacyUnavailableDocument(docItem.url) && (
+                        <p className="text-xs text-amber-600">Arquivo indisponível: solicite o novo envio (upload).</p>
+                      )}
                     </div>
-                  </a>
+                  </button>
+                  <DeleteDocumentButton document={docItem} />
+                  </div>
                 ))}
                 {documents.filter(d => d.patientId === selectedPatientDetails.id).length === 0 && (
                   <p className="text-sm text-zinc-400 italic text-center py-4">Nenhum documento anexado.</p>

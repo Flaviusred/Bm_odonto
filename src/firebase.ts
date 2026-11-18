@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, getAuth, signOut } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 import { deleteApp } from 'firebase/app';
 // @ts-ignore
 import firebaseConfig from '../firebase-applet-config.json';
@@ -11,6 +12,7 @@ const useNamedDatabase = Boolean(configuredDatabaseId && configuredDatabaseId !=
 
 export const db = useNamedDatabase ? getFirestore(app, configuredDatabaseId!) : getFirestore(app);
 export const  auth = getAuth(app);
+export const storage = getStorage(app);
 
 const isEmailAlreadyInUseError = (error: unknown) => {
 	return (error as any)?.code === 'auth/email-already-in-use';
