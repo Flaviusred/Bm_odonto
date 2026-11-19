@@ -173,6 +173,7 @@ export function PatientPortal({
       cancelled: 'bg-red-100 text-red-600',
       completed: 'bg-emerald-100 text-emerald-600',
       blocked: 'bg-amber-100 text-amber-700',
+      no_show: 'bg-amber-100 text-amber-700',
     };
 
     const statusLabels = {
@@ -181,6 +182,7 @@ export function PatientPortal({
       cancelled: 'Cancelado',
       completed: 'Concluído',
       blocked: 'Bloqueado',
+      no_show: 'Não compareceu',
     };
 
     return (

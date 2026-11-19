@@ -2,6 +2,10 @@
 
 Sistema de gestão odontológica desenvolvido para o Corpo de Bombeiros Militar da Paraíba. Permite o gerenciamento de pacientes (militares e civis), agendamentos, tratamentos, dentistas, atendentes e usuários administrativos.
 
+O dashboard e os relatórios Excel/PDF apresentam quantidades de procedimentos por tipo e dentista. Os totais somam as quantidades registradas nos tratamentos pela data do tratamento, independentemente do status dos agendamentos; o filtro de período do relatório é selecionado na exportação.
+
+Na agenda e no portal do dentista, agendamentos em aberto podem ser marcados como “Não compareceu” após o horário marcado, mediante confirmação. A falta permanece no histórico e não libera o horário; não conta como atendimento concluído. Para localizar consultas passadas na agenda, utilize a opção de mostrar agendamentos passados.
+
 ---
 
 ## Tecnologias
