@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './Car
 import { Input } from './Input';
 import { Modal } from './Modal';
 import { DeleteDocumentButton } from './DeleteDocumentButton';
+import { isOpenAppointment } from '../lib/appointmentStatus';
 import { Patient, Appointment, Treatment, Dentist, PatientType, PatientDocument } from '../types';
 import { patientService } from '../services/patientService';
 import { cn, validateCPF, maskCPF, maskPhone, maskCEP } from '../lib/utils';
@@ -942,7 +943,7 @@ function PatientListContent({
                 <CardTitle className="text-lg">Próximos Agendamentos</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                {patientAppointments.filter(a => a.status !== 'completed' && a.status !== 'cancelled').map(apt => (
+                {patientAppointments.filter(a => isOpenAppointment(a.status)).map(apt => (
                   <div key={apt.id} className="p-3 rounded-lg border border-zinc-100 bg-zinc-50/50">
                     <div className="flex justify-between items-start mb-2">
                       <div className="flex items-center gap-2 text-sm font-bold text-zinc-900">
@@ -956,7 +957,7 @@ function PatientListContent({
                     <p className="text-xs text-zinc-500">Com {getDentistName(apt.dentistId)}</p>
                   </div>
                 ))}
-                {patientAppointments.filter(a => a.status !== 'completed' && a.status !== 'cancelled').length === 0 && (
+                {patientAppointments.filter(a => isOpenAppointment(a.status)).length === 0 && (
                   <p className="text-sm text-zinc-400 italic text-center py-4">Nenhum agendamento futuro.</p>
                 )}
               </CardContent>

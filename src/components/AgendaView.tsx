@@ -8,6 +8,8 @@ import { Input } from './Input';
 import { cn } from '../lib/utils';
 import { parseDate, formatDateLocal } from '../lib/dateUtils';
 import { PROCEDURE_TYPES } from '../constants';
+import { NoShowButton } from './NoShowButton';
+import { isOpenAppointment } from '../lib/appointmentStatus';
 
 interface AgendaViewProps {
   appointments: Appointment[];
@@ -16,6 +18,7 @@ interface AgendaViewProps {
   schedules: DentistSchedule[];
   onAddAppointment: (appointment: Omit<Appointment, 'id' | 'createdAt'>) => void;
   onUpdateStatus: (id: string, status: Appointment['status']) => Promise<void>;
+  onMarkNoShow: (id: string) => Promise<void>;
   onUpdateAppointment: (appointment: Appointment) => void;
   onDeleteAppointment: (id: string) => void;
   onAddTreatment: (treatment: {
@@ -36,6 +39,7 @@ export function AgendaView({
   schedules,
   onAddAppointment,
   onUpdateStatus,
+  onMarkNoShow,
   onUpdateAppointment,
   onDeleteAppointment,
   onAddTreatment,
@@ -228,6 +232,7 @@ export function AgendaView({
     cancelled: 'bg-red-100 text-red-600 border-red-200',
     completed: 'bg-emerald-100 text-emerald-600 border-emerald-200',
     blocked: 'bg-zinc-200 text-zinc-700 border-zinc-300',
+    no_show: 'bg-amber-100 text-amber-700 border-amber-200',
   };
 
   const statusBorderColors = {
@@ -236,6 +241,7 @@ export function AgendaView({
     cancelled: 'border-l-red-400',
     completed: 'border-l-emerald-400',
     blocked: 'border-l-zinc-600',
+    no_show: 'border-l-amber-500',
   };
 
   const statusLabels = {
@@ -244,6 +250,7 @@ export function AgendaView({
     cancelled: 'Cancelado',
     completed: 'Concluído',
     blocked: 'Bloqueado',
+    no_show: 'Não compareceu',
   };
 
   const navigate = (direction: 'prev' | 'next') => {
@@ -640,7 +647,7 @@ export function AgendaView({
                   
                   {/* Action Buttons Container - Wraps safely on mobile */}
                   <div className="flex flex-wrap items-center gap-1 sm:gap-2 w-full sm:w-auto justify-start sm:justify-end pt-2 sm:pt-0 border-t sm:border-transparent border-zinc-100 mt-1 sm:mt-0">
-                    {apt.status !== 'completed' && apt.status !== 'cancelled' && (
+                    {isOpenAppointment(apt.status) && (
                       <>
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEditModal(apt)} title="Editar"><UserRound className="h-4 w-4 text-zinc-500" /></Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleWhatsAppReminder(apt)} title="Lembrete WhatsApp"><MessageCircle className="h-4 w-4 text-emerald-500" /></Button>
@@ -656,6 +663,7 @@ export function AgendaView({
                         </Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setCompleteConfirm(apt)} title="Concluir"><CheckCircle2 className="h-4 w-4 text-emerald-500" /></Button>
                         <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onUpdateStatus(apt.id, 'cancelled')} title="Cancelar"><XCircle className="h-4 w-4 text-red-500" /></Button>
+                        <NoShowButton appointment={apt} patientName={getPatientName(apt.patientId)} onMarkNoShow={onMarkNoShow} />
                       </>
                     )}
                     <Button variant="ghost" size="icon" className="h-8 w-8 ml-auto sm:ml-0" onClick={() => onDeleteAppointment(apt.id)} title="Excluir"><AlertCircle className="h-4 w-4 text-zinc-400" /></Button>

@@ -6,6 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './Car
 import { Button } from './Button';
 import { Input } from './Input';
 import { Modal } from './Modal';
+import { NoShowButton } from './NoShowButton';
+import { isOpenAppointment } from '../lib/appointmentStatus';
 import { DeleteDocumentButton } from './DeleteDocumentButton';
 import { 
   Calendar, 
@@ -50,6 +52,7 @@ interface DentistPortalProps {
   onUpdateTreatment: (treatment: Treatment) => void;
   onAddDocument: (doc: Omit<PatientDocument, 'id' | 'uploadedAt' | 'url' | 'storagePath'> & { file: File }) => Promise<void>;
   onUpdateAppointmentStatus: (id: string, status: Appointment['status']) => void;
+  onMarkNoShow: (id: string) => Promise<void>;
   onUpdatePatient: (patient: Patient) => void;
   schedules: DentistSchedule[];
   unseenCount: number;
@@ -75,6 +78,7 @@ export function DentistPortal({
   onUpdateTreatment,
   onAddDocument,
   onUpdateAppointmentStatus,
+  onMarkNoShow,
   onUpdatePatient,
   schedules,
   unseenCount, setUnseenCount,
@@ -139,6 +143,9 @@ export function DentistPortal({
   const [isScheduleNextPromptOpen, setIsScheduleNextPromptOpen] = useState(false);
   const [currentAppointment, setCurrentAppointment] = useState<Appointment | null>(null);
   const [appointmentDetail, setAppointmentDetail] = useState<{ apt: Appointment; patient: Patient | null } | null>(null);
+  const detailAppointment = appointmentDetail
+    ? appointments.find(appointment => appointment.id === appointmentDetail.apt.id) || appointmentDetail.apt
+    : null;
 
   const openAppointmentDetail = (apt: Appointment) => {
     setAppointmentDetail({ apt, patient: patients.find(p => p.id === apt.patientId) || null });
@@ -405,6 +412,7 @@ export function DentistPortal({
     cancelled: 'bg-red-100 text-red-700 border-red-200',
     completed: 'bg-emerald-100 text-emerald-700 border-emerald-200',
     blocked: 'bg-amber-100 text-amber-700 border-amber-200',
+    no_show: 'bg-amber-100 text-amber-700 border-amber-200',
   };
 
   const statusLabel: Partial<Record<Appointment['status'], string>> = {
@@ -413,6 +421,7 @@ export function DentistPortal({
     cancelled: 'Cancelado',
     completed: 'Concluído',
     blocked: 'Bloqueado',
+    no_show: 'Não compareceu',
   };
 
   const handleRegisterTreatment = (e: React.FormEvent) => {
@@ -877,7 +886,7 @@ export function DentistPortal({
                               </td>
                               <td className="px-4 lg:px-6 py-4 text-right">
                                 <div className="flex justify-end gap-2 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
-                                  {apt.status !== 'completed' && apt.status !== 'cancelled' && (
+                                  {isOpenAppointment(apt.status) && (
                                     <Button 
                                       size="sm" 
                                       className="gap-2"
@@ -890,6 +899,7 @@ export function DentistPortal({
                                       <CheckCircle2 className="h-4 w-4" /> Concluir Atendimento
                                     </Button>
                                   )}
+                                  <NoShowButton appointment={apt} patientName={getPatientName(apt.patientId)} onMarkNoShow={onMarkNoShow} />
                                   <Button 
                                     variant="ghost" 
                                     size="sm"
@@ -936,7 +946,7 @@ export function DentistPortal({
                           </div>
                           
                           <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-zinc-50">
-                            {apt.status !== 'completed' && apt.status !== 'cancelled' && (
+                            {isOpenAppointment(apt.status) && (
                               <Button 
                                 size="sm" 
                                 className="flex-1 gap-2 text-xs h-10"
@@ -949,6 +959,7 @@ export function DentistPortal({
                                 <CheckCircle2 className="h-4 w-4" /> Concluir Atendimento
                               </Button>
                             )}
+                            <NoShowButton appointment={apt} patientName={getPatientName(apt.patientId)} onMarkNoShow={onMarkNoShow} />
                             <Button 
                               variant="outline" 
                               size="sm"
@@ -1428,7 +1439,7 @@ export function DentistPortal({
       </Modal>
       {/* Appointment Detail / Patient Quick Info Modal */}
       <Modal isOpen={!!appointmentDetail} onClose={() => setAppointmentDetail(null)} title="Detalhes do Agendamento">
-        {appointmentDetail && (
+        {appointmentDetail && detailAppointment && (
           <div className="space-y-5">
             {/* Patient header */}
             <div className="flex items-center gap-4 p-4 bg-zinc-50 rounded-xl border border-zinc-100">
@@ -1469,33 +1480,33 @@ export function DentistPortal({
               <div className="flex flex-wrap items-center gap-4 text-sm">
                 <div className="flex items-center gap-1.5 text-zinc-700">
                   <Calendar className="h-4 w-4 text-emerald-500 shrink-0" />
-                  <span className="font-medium">{formatDateDDMMYYYY(appointmentDetail.apt.date)}</span>
+                  <span className="font-medium">{formatDateDDMMYYYY(detailAppointment.date)}</span>
                 </div>
                 <div className="flex items-center gap-1.5 text-zinc-700">
                   <Clock className="h-4 w-4 text-emerald-500 shrink-0" />
-                  <span className="font-medium">{appointmentDetail.apt.time}</span>
+                  <span className="font-medium">{detailAppointment.time}</span>
                 </div>
               </div>
-              {appointmentDetail.apt.notes && (
-                <p className="text-xs text-zinc-600 mt-2 italic">{appointmentDetail.apt.notes}</p>
+              {detailAppointment.notes && (
+                <p className="text-xs text-zinc-600 mt-2 italic">{detailAppointment.notes}</p>
               )}
               <div className="mt-2">
                 <span className={cn(
                   'px-2.5 py-1 rounded-full text-xs font-medium border',
-                  statusClass[appointmentDetail.apt.status]
+                  statusClass[detailAppointment.status]
                 )}>
-                  {statusLabel[appointmentDetail.apt.status]}
+                  {statusLabel[detailAppointment.status]}
                 </span>
               </div>
             </div>
 
             {/* Actions */}
             <div className="flex flex-col gap-2 pt-2 border-t border-zinc-100">
-              {appointmentDetail.apt.status !== 'completed' && appointmentDetail.apt.status !== 'cancelled' && (
+              {isOpenAppointment(detailAppointment.status) && (
                 <Button
                   className="w-full gap-2"
                   onClick={() => {
-                    setCurrentAppointment(appointmentDetail.apt);
+                    setCurrentAppointment(detailAppointment);
                     setSelectedPatient(appointmentDetail.patient);
                     setAppointmentDetail(null);
                     setIsTreatmentModalOpen(true);
@@ -1504,6 +1515,8 @@ export function DentistPortal({
                   <CheckCircle2 className="h-4 w-4" /> Concluir Atendimento
                 </Button>
               )}
+              <NoShowButton appointment={detailAppointment}
+                patientName={appointmentDetail.patient?.name || 'Paciente'} onMarkNoShow={onMarkNoShow} />
               <Button
                 variant="outline"
                 className="w-full gap-2"

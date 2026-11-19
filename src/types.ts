@@ -81,6 +81,7 @@ export interface Appointment {
     | 'Cancelado'
     | 'Concluído'
     | 'Bloqueado'
+    | 'no_show'
     | 'scheduled'
     | 'confirmed'
     | 'cancelled'

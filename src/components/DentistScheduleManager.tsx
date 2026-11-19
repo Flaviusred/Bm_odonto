@@ -286,6 +286,7 @@ export function DentistScheduleManager({
                                 "h-full rounded-xl p-3 flex items-center justify-between transition-all",
                                 appointment.status === 'confirmed' ? "bg-blue-50 border border-blue-100" :
                                 appointment.status === 'completed' ? "bg-emerald-50 border border-emerald-100" :
+                                appointment.status === 'no_show' ? "bg-amber-50 border border-amber-100" :
                                 appointment.status === 'blocked' ? "bg-zinc-100 border border-zinc-200 opacity-75" :
                                 "bg-zinc-50 border border-zinc-100"
                               )}>
@@ -313,10 +314,11 @@ export function DentistScheduleManager({
                                   "text-[10px] font-bold uppercase px-2 py-1 rounded-full",
                                   appointment.status === 'confirmed' ? "bg-blue-100 text-blue-600" :
                                   appointment.status === 'completed' ? "bg-emerald-100 text-emerald-600" :
+                                  appointment.status === 'no_show' ? "bg-amber-100 text-amber-700" :
                                   appointment.status === 'blocked' ? "bg-zinc-200 text-zinc-500" :
                                   "bg-zinc-200 text-zinc-600"
                                 )}>
-                                  {appointment.status === 'blocked' ? 'Bloqueado' : appointment.status}
+                                  {appointment.status === 'blocked' ? 'Bloqueado' : appointment.status === 'no_show' ? 'Não compareceu' : appointment.status}
                                 </span>
                               </div>
                             ) : (

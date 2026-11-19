@@ -32,10 +32,12 @@ import { API_BASE, safeRandomUUID, validateCPF } from './lib/utils';
 import { canAccessTab, getDefaultTabForUser, isDentistTab, isPatientTab } from './lib/permissions';
 import LoadingOverlay from './components/LoadingOverlay';
 import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
-import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField, orderBy, getDocs, writeBatch } from 'firebase/firestore';
+import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField, orderBy, getDocs, writeBatch, runTransaction } from 'firebase/firestore';
 import { sendPasswordResetEmail, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import { db, auth, createAuthUserWithSecondaryApp } from './firebase';
 import { normalizeTreatmentProcedures } from './constants';
+import { getProcedureReport, getProcedureTypeTotals } from './lib/procedureReport';
+import { canMarkNoShow } from './lib/appointmentStatus';
 import { normalizeDentistSchedules } from './lib/scheduleUtils';
 
 enum OperationType {
@@ -221,7 +223,7 @@ export default function App() {
     emailReminders: true,
     reminderHoursBefore: 24
   });
-  const finalizedAppointmentStatuses = new Set<Appointment['status']>(['completed', 'cancelled', 'Concluído', 'Cancelado', 'blocked', 'Bloqueado']);
+  const finalizedAppointmentStatuses = new Set<Appointment['status']>(['completed', 'cancelled', 'Concluído', 'Cancelado', 'blocked', 'Bloqueado', 'no_show']);
 
   // Helper: resolve a recorded authUid for a given app-level user id
   const getAuthUidForUserId = (id: string): string | undefined => {
@@ -1813,6 +1815,30 @@ export default function App() {
     }
   };
 
+  const markAppointmentNoShow = async (id: string) => {
+    const updated = await runTransaction(db, async transaction => {
+      const ref = doc(db, 'appointments', id);
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists()) throw new Error('Agendamento não encontrado.');
+      const appointment = { ...snapshot.data(), id: snapshot.id } as Appointment;
+      if (!canMarkNoShow(appointment)) {
+        throw new Error('A falta só pode ser registrada após o horário de um agendamento em aberto.');
+      }
+      transaction.update(ref, { status: 'no_show' });
+      return { ...appointment, status: 'no_show' as const };
+    });
+    logAction('Atualização de Status', 'appointment', id, 'Paciente não compareceu ao agendamento.');
+    try {
+      const response = await fetch(`${API_BASE}/api/sync-appointment`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appointment: updated }),
+      });
+      if (!response.ok) console.warn('Falha ao sincronizar falta com o calendário:', response.status);
+    } catch (error) {
+      console.warn('Falha ao sincronizar falta com o calendário:', error);
+    }
+  };
+
   const updateAppointment = async (updatedAppointment: Appointment) => {
     try {
       const patientAuthUid = updatedAppointment.patientAuthUid || getAuthUidForUserId(updatedAppointment.patientId) || null;
@@ -2269,7 +2295,7 @@ export default function App() {
     const activeDentists = dentists.length;
 
     const statusCounts = filteredAppointments.reduce((acc, apt) => {
-      const status = String(apt.status || 'Desconhecido');
+      const status = apt.status === 'no_show' ? 'Não compareceu' : String(apt.status || 'Desconhecido');
       acc[status] = (acc[status] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
@@ -2309,6 +2335,7 @@ export default function App() {
       },
       statusCounts,
       dentistCounts,
+      procedureReport: getProcedureReport(treatments, dentists, periodStart, periodStart ? endOfToday : null),
       attendedByType: [
         { type: patientTypeLabels.cbmpb, total: attendedByType.cbmpb },
         { type: patientTypeLabels.security, total: attendedByType.security },
@@ -2355,6 +2382,14 @@ export default function App() {
     const dentistWs = XLSX.utils.aoa_to_sheet(dentistRows);
     XLSX.utils.book_append_sheet(wb, dentistWs, 'Por Dentista');
 
+    const procedureRows: (string | number)[][] = [['Dentista', 'ID do dentista', 'Tipo de procedimento', 'Quantidade']];
+    data.procedureReport.forEach(row => procedureRows.push([row.dentist, row.dentistId || 'Não informado', row.type, row.quantity]));
+    const procedureWs = XLSX.utils.aoa_to_sheet(procedureRows);
+    XLSX.utils.book_append_sheet(wb, procedureWs, 'Procedimentos por Dentista');
+    const procedureTotals: (string | number)[][] = [['Tipo de procedimento', 'Quantidade']];
+    getProcedureTypeTotals(data.procedureReport).forEach(row => procedureTotals.push([row.type, row.quantity]));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(procedureTotals), 'Totais por Procedimento');
+
     const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
     const blob = new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     const url = window.URL.createObjectURL(blob);
@@ -2384,6 +2419,12 @@ export default function App() {
       .join('');
     const typeRows = data.attendedByType
       .map((entry) => `<tr><td>${escapeHtml(entry.type)}</td><td>${escapeHtml(entry.total)}</td></tr>`)
+      .join('');
+    const procedureRows = data.procedureReport
+      .map(row => `<tr><td>${escapeHtml(row.dentist)}</td><td>${escapeHtml(row.dentistId || 'Não informado')}</td><td>${escapeHtml(row.type)}</td><td>${escapeHtml(row.quantity)}</td></tr>`)
+      .join('');
+    const procedureTotalRows = getProcedureTypeTotals(data.procedureReport)
+      .map(row => `<tr><td>${escapeHtml(row.type)}</td><td>${escapeHtml(row.quantity)}</td></tr>`)
       .join('');
 
     const popup = window.open('', '_blank', 'width=1000,height=720');
@@ -2442,6 +2483,19 @@ export default function App() {
         <table>
           <thead><tr><th>Dentista</th><th>Quantidade</th></tr></thead>
           <tbody>${dentistRows}</tbody>
+        </table>
+
+        <h2>Procedimentos por tipo</h2>
+        <p>Quantidades registradas nos tratamentos, pela data do tratamento.</p>
+        <table>
+          <thead><tr><th>Tipo de procedimento</th><th>Quantidade</th></tr></thead>
+          <tbody>${procedureTotalRows || '<tr><td colspan="2">Nenhum procedimento registrado no período.</td></tr>'}</tbody>
+        </table>
+
+        <h2>Procedimentos por dentista</h2>
+        <table>
+          <thead><tr><th>Dentista</th><th>ID do dentista</th><th>Tipo de procedimento</th><th>Quantidade</th></tr></thead>
+          <tbody>${procedureRows || '<tr><td colspan="4">Nenhum procedimento registrado no período.</td></tr>'}</tbody>
         </table>
       </body>
       </html>
@@ -2626,6 +2680,7 @@ export default function App() {
               onUpdateTreatment={updateTreatment}
               onAddDocument={addDocument}
               onUpdateAppointmentStatus={updateAppointmentStatus}
+              onMarkNoShow={markAppointmentNoShow}
               onUpdatePatient={updatePatient}
               schedules={normalizeDentistSchedules(schedules)}
               unseenCount={unseenCount}
@@ -2711,8 +2766,8 @@ export default function App() {
                         </div>
                       </div>
                       <p className="text-sm text-zinc-600">
-                        O arquivo Excel inclui 4 abas: Resumo Geral, Atendimentos por Tipo de Usuário (CBMPB, Segurança Pública e Civil),
-                        Agendamentos por Status e por Dentista — filtrados pelo período selecionado.
+                        O arquivo Excel inclui resumo geral, atendimentos por tipo de usuário, agendamentos por status e dentista,
+                        além de quantidades de procedimentos por tipo e por dentista no período selecionado.
                       </p>
                       <Button onClick={downloadDashboardSpreadsheet}>Baixar planilha (.xlsx)</Button>
                     </CardContent>
@@ -2777,6 +2832,7 @@ export default function App() {
                   schedules={normalizeDentistSchedules(schedules)}
                   onAddAppointment={addAppointment}
                   onUpdateStatus={updateAppointmentStatus}
+                  onMarkNoShow={markAppointmentNoShow}
                   onUpdateAppointment={updateAppointment}
                   onDeleteAppointment={deleteAppointment}
                   onAddTreatment={addTreatment}
