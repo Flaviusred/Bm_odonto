@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "cross-env NODE_ENV=development tsx server.ts",
+    "dev:emulador": "firebase emulators:exec \"npm run dev:emulador:app\" --only auth,firestore --project demo-bm-odonto --ui --import=./.emulator-data --export-on-exit=./.emulator-data",
+    "dev:emulador:app": "cross-env NODE_ENV=development VITE_USE_EMULATOR=true tsx scripts/seed-emulator.ts && cross-env NODE_ENV=development VITE_USE_EMULATOR=true tsx server.ts",
     "prestart": "node ./scripts/ensure-dist.js",
     "build": "vite build",
     "start": "cross-env NODE_ENV=production tsx server.ts",

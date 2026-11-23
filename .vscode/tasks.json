@@ -68,6 +68,14 @@
 			]
 		},
 		{
+			"label": "Testar com emulador (modo teste)",
+			"type": "shell",
+			"command": "npm run dev:emulador",
+			"args": [],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
 			"label": "Start BM Odonto local",
 			"type": "shell",
 			"command": "npm run dev",

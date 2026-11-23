@@ -112,6 +112,35 @@ O servidor Express sobe na porta `3000` (ou `PORT` via variável de ambiente). O
 
 ---
 
+## Testar antes do deploy (modo teste com Firebase Emulator)
+
+O modo teste roda o app inteiro no seu computador usando o **Firebase Emulator** (Auth + Firestore).
+Nenhum dado de produção é lido ou alterado, as regras de `firestore.rules` locais são aplicadas
+e nenhum e-mail é enviado de verdade (o conteúdo aparece no terminal).
+
+Pré-requisitos (uma vez só):
+
+- Java 11 ou superior (necessário para o emulador do Firestore)
+- Firebase CLI: `npm install -g firebase-tools`
+
+Para rodar:
+
+```bash
+npm install
+npm run dev:emulador
+```
+
+Ou no VS Code: *Terminal → Run Task → Testar com emulador (modo teste)*.
+
+- App: http://localhost:3000 (a aba do navegador mostra `[TESTE]`)
+- Painel do emulador (usuários e documentos): http://localhost:4000
+- Usuários de teste (senha `teste123`): `admin@teste.local`, `atendente@teste.local`,
+  `dentista@teste.local`, `paciente@teste.local`
+- Os dados de teste ficam salvos em `.emulator-data/` (fora do Git). Apague a pasta para recomeçar do zero.
+- Para parar: `Ctrl+C` no terminal.
+
+> Lembrete: qualquer push na branch `main` faz deploy automático. Teste em outra branch e só depois faça o merge.
+
 ## Variáveis de ambiente
 
 Crie um arquivo `.env` na raiz com as seguintes variáveis:
