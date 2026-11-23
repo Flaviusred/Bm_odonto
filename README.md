@@ -120,7 +120,7 @@ e nenhum e-mail é enviado de verdade (o conteúdo aparece no terminal).
 
 Pré-requisitos (uma vez só):
 
-- Java 11 ou superior (necessário para o emulador do Firestore)
+- Java 21 ou superior (necessário para o emulador do Firestore). No Windows: `winget install EclipseAdoptium.Temurin.21.JDK` e reabra o VS Code
 - Firebase CLI: `npm install -g firebase-tools`
 
 Para rodar:
