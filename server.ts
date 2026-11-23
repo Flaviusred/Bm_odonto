@@ -30,6 +30,9 @@ if (fs.existsSync(localEnvPath)) {
 const IS_EMULATOR = Boolean(process.env.FIRESTORE_EMULATOR_HOST && process.env.FIREBASE_AUTH_EMULATOR_HOST);
 const EMULATOR_PROJECT_ID = 'demo-bm-odonto';
 if (IS_EMULATOR) {
+  // Ignora credenciais reais da máquina (ex.: GOOGLE_APPLICATION_CREDENTIALS apontando para a
+  // service account de produção): o emulador não precisa delas.
+  delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
   console.log(`*** MODO TESTE: usando Firebase Emulator (Firestore ${process.env.FIRESTORE_EMULATOR_HOST}, Auth ${process.env.FIREBASE_AUTH_EMULATOR_HOST}). Nenhum dado de produção é acessado. ***`);
 }
 

@@ -21,6 +21,10 @@ if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_
   process.exit(1);
 }
 
+// Ignora credenciais reais da máquina (ex.: GOOGLE_APPLICATION_CREDENTIALS apontando para a
+// service account de produção): o emulador não precisa delas.
+delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
 const clientConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'firebase-applet-config.json'), 'utf-8'));
 const databaseId = String(clientConfig.firestoreDatabaseId || '').trim();
 
