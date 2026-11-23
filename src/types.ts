@@ -81,6 +81,7 @@ export interface Appointment {
     | 'Cancelado'
     | 'Concluído'
     | 'Bloqueado'
+    | 'no_show'
     | 'scheduled'
     | 'confirmed'
     | 'cancelled'
@@ -119,6 +120,7 @@ export interface PatientDocument {
   name: string;
   type: 'Exame' | 'Documento' | 'Raio-X';
   url: string;
+  storagePath?: string;
   uploadedAt: string;
   patientAuthUid?: string | null;
 }

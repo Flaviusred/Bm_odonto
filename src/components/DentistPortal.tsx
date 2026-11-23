@@ -6,6 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './Car
 import { Button } from './Button';
 import { Input } from './Input';
 import { Modal } from './Modal';
+import { NoShowButton } from './NoShowButton';
+import { isOpenAppointment } from '../lib/appointmentStatus';
+import { DeleteDocumentButton } from './DeleteDocumentButton';
 import { 
   Calendar, 
   Stethoscope, 
@@ -31,8 +34,8 @@ import {
 import { cn } from '../lib/utils';
 import { Toaster, toast } from 'sonner';
 
-const PDF_MAX_MB = 1;
-const PDF_MAX_BYTES = PDF_MAX_MB * 1024 * 1024;
+import { DOCUMENT_MAX_MB as PDF_MAX_MB, DOCUMENT_MAX_BYTES as PDF_MAX_BYTES, LEGACY_DOCUMENT_MESSAGE, isLegacyUnavailableDocument, openStoredDocument } from '../lib/documentUtils';
+
 const RECORD_ALLOWED_TYPES = ['application/pdf'];
 
 interface DentistPortalProps {
@@ -47,8 +50,9 @@ interface DentistPortalProps {
   onAddAppointment: (appointment: Omit<Appointment, 'id' | 'createdAt'>) => void;
   onAddTreatment: (treatment: Omit<Treatment, 'id' | 'createdAt'>) => void;
   onUpdateTreatment: (treatment: Treatment) => void;
-  onAddDocument: (doc: Omit<PatientDocument, 'id' | 'uploadedAt'>) => void;
+  onAddDocument: (doc: Omit<PatientDocument, 'id' | 'uploadedAt' | 'url' | 'storagePath'> & { file: File }) => Promise<void>;
   onUpdateAppointmentStatus: (id: string, status: Appointment['status']) => void;
+  onMarkNoShow: (id: string) => Promise<void>;
   onUpdatePatient: (patient: Patient) => void;
   schedules: DentistSchedule[];
   unseenCount: number;
@@ -74,6 +78,7 @@ export function DentistPortal({
   onUpdateTreatment,
   onAddDocument,
   onUpdateAppointmentStatus,
+  onMarkNoShow,
   onUpdatePatient,
   schedules,
   unseenCount, setUnseenCount,
@@ -138,12 +143,14 @@ export function DentistPortal({
   const [isScheduleNextPromptOpen, setIsScheduleNextPromptOpen] = useState(false);
   const [currentAppointment, setCurrentAppointment] = useState<Appointment | null>(null);
   const [appointmentDetail, setAppointmentDetail] = useState<{ apt: Appointment; patient: Patient | null } | null>(null);
+  const detailAppointment = appointmentDetail
+    ? appointments.find(appointment => appointment.id === appointmentDetail.apt.id) || appointmentDetail.apt
+    : null;
 
   const openAppointmentDetail = (apt: Appointment) => {
     setAppointmentDetail({ apt, patient: patients.find(p => p.id === apt.patientId) || null });
   };
 
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -376,11 +383,17 @@ export function DentistPortal({
     setExpandedTreatments([]);
   };
 
+  const [isUploading, setIsUploading] = useState(false);
   const [uploadForm, setUploadForm] = useState({
     name: '',
     type: 'Exame' as PatientDocument['type'],
     file: null as File | null,
   });
+  const closeUploadModal = () => {
+    if (isUploading) return;
+    setIsUploadModalOpen(false);
+    setUploadForm({ name: '', type: 'Exame', file: null });
+  };
 
   const myAppointments = appointments.filter((a: any) =>
     (a?.dentistId && dentistLinkedIds.includes(a.dentistId))
@@ -399,6 +412,7 @@ export function DentistPortal({
     cancelled: 'bg-red-100 text-red-700 border-red-200',
     completed: 'bg-emerald-100 text-emerald-700 border-emerald-200',
     blocked: 'bg-amber-100 text-amber-700 border-amber-200',
+    no_show: 'bg-amber-100 text-amber-700 border-amber-200',
   };
 
   const statusLabel: Partial<Record<Appointment['status'], string>> = {
@@ -407,6 +421,7 @@ export function DentistPortal({
     cancelled: 'Cancelado',
     completed: 'Concluído',
     blocked: 'Bloqueado',
+    no_show: 'Não compareceu',
   };
 
   const handleRegisterTreatment = (e: React.FormEvent) => {
@@ -453,7 +468,7 @@ export function DentistPortal({
     setAppointmentForm({ patientId: '', date: '', time: '', notes: '' });
   };
 
-  const handleUpload = (e: React.FormEvent) => {
+  const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedPatient || !uploadForm.file) {
       toast.error('Selecione um arquivo para upload.');
@@ -471,15 +486,19 @@ export function DentistPortal({
       return;
     }
 
-    // Simulate file upload
-    const fileUrl = URL.createObjectURL(uploadForm.file);
-
-    onAddDocument({
-      patientId: selectedPatient.id,
-      name: uploadForm.name || uploadForm.file.name,
-      type: uploadForm.type,
-      url: fileUrl,
-    });
+    setIsUploading(true);
+    try {
+      await onAddDocument({
+        patientId: selectedPatient.id,
+        name: uploadForm.name || uploadForm.file.name,
+        type: uploadForm.type,
+        file: uploadForm.file,
+      });
+    } catch {
+      return;
+    } finally {
+      setIsUploading(false);
+    }
 
     toast.success('Documento enviado com sucesso!');
     setIsUploadModalOpen(false);
@@ -635,7 +654,22 @@ export function DentistPortal({
                               <p className="text-[10px] text-zinc-500 uppercase">{translateDocumentType(doc.type)}</p>
                             </div>
                           </div>
-                          <a href={doc.url} target="_blank" rel="noreferrer" className="text-emerald-600 hover:underline text-xs shrink-0 ml-2">Ver</a>
+                          <div className="flex items-center shrink-0">
+                          <button
+                            type="button"
+                            onClick={async (e) => {
+                              e.preventDefault();
+                              try {
+                                if (!await openStoredDocument(doc)) toast.error(LEGACY_DOCUMENT_MESSAGE);
+                              } catch (error) {
+                                console.error('Falha ao abrir documento:', error);
+                                toast.error(error instanceof Error ? error.message : 'Falha ao abrir o documento.');
+                              }
+                            }}
+                            className="text-emerald-600 hover:underline text-xs shrink-0 ml-2 cursor-pointer"
+                          >{isLegacyUnavailableDocument(doc.url) ? 'Reenviar' : 'Ver'}</button>
+                          <DeleteDocumentButton document={doc} />
+                          </div>
                         </div>
                   ))}
                   {documents.filter(d => d.patientId === selectedPatient.id && (docFilter === 'all' || d.type === docFilter)).length === 0 && (
@@ -852,7 +886,7 @@ export function DentistPortal({
                               </td>
                               <td className="px-4 lg:px-6 py-4 text-right">
                                 <div className="flex justify-end gap-2 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity">
-                                  {apt.status !== 'completed' && apt.status !== 'cancelled' && (
+                                  {isOpenAppointment(apt.status) && (
                                     <Button 
                                       size="sm" 
                                       className="gap-2"
@@ -865,6 +899,7 @@ export function DentistPortal({
                                       <CheckCircle2 className="h-4 w-4" /> Concluir Atendimento
                                     </Button>
                                   )}
+                                  <NoShowButton appointment={apt} patientName={getPatientName(apt.patientId)} onMarkNoShow={onMarkNoShow} />
                                   <Button 
                                     variant="ghost" 
                                     size="sm"
@@ -911,7 +946,7 @@ export function DentistPortal({
                           </div>
                           
                           <div className="flex flex-col sm:flex-row gap-2 pt-2 border-t border-zinc-50">
-                            {apt.status !== 'completed' && apt.status !== 'cancelled' && (
+                            {isOpenAppointment(apt.status) && (
                               <Button 
                                 size="sm" 
                                 className="flex-1 gap-2 text-xs h-10"
@@ -924,6 +959,7 @@ export function DentistPortal({
                                 <CheckCircle2 className="h-4 w-4" /> Concluir Atendimento
                               </Button>
                             )}
+                            <NoShowButton appointment={apt} patientName={getPatientName(apt.patientId)} onMarkNoShow={onMarkNoShow} />
                             <Button 
                               variant="outline" 
                               size="sm"
@@ -1267,7 +1303,7 @@ export function DentistPortal({
         </form>
       </Modal>
 
-      <Modal isOpen={isUploadModalOpen} onClose={() => setIsUploadModalOpen(false)} title="Upload de Documento">
+      <Modal isOpen={isUploadModalOpen} onClose={closeUploadModal} title="Upload de Documento">
         <form onSubmit={handleUpload} className="space-y-4">
           <Input label="Nome do Documento" required value={uploadForm.name} onChange={e => setUploadForm({...uploadForm, name: e.target.value})} />
           <div className="space-y-1.5">
@@ -1282,23 +1318,25 @@ export function DentistPortal({
               <option value="Raio-X">Raio-X</option>
             </select>
           </div>
-          <div className="border-2 border-dashed border-zinc-200 rounded-xl p-8 text-center bg-zinc-50 cursor-pointer hover:bg-zinc-100 transition-colors" onClick={() => fileInputRef.current?.click()}>
+          <label className="block border-2 border-dashed border-zinc-200 rounded-xl p-8 text-center bg-zinc-50 cursor-pointer hover:bg-zinc-100 transition-colors">
             <input 
               type="file" 
-              ref={fileInputRef} 
-              className="hidden" 
+              className="sr-only"
               accept="application/pdf"
-              onChange={e => setUploadForm({...uploadForm, file: e.target.files?.[0] || null})}
+              onChange={e => {
+                const file = e.target.files?.[0] || null;
+                setUploadForm(current => ({ ...current, file }));
+              }}
             />
             <Upload className="h-8 w-8 text-zinc-400 mx-auto mb-2" />
             <p className="text-sm font-medium text-zinc-700">
-              {uploadForm.file ? uploadForm.file.name : 'Clique ou arraste o arquivo aqui'}
+              {uploadForm.file ? `Arquivo selecionado: ${uploadForm.file.name}` : 'Clique para selecionar um arquivo'}
             </p>
             <p className="text-xs text-zinc-400 mt-1">Apenas PDF, até {PDF_MAX_MB}MB</p>
-          </div>
+          </label>
           <div className="flex flex-col sm:flex-row justify-end gap-3 pt-2">
-             <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={() => setIsUploadModalOpen(false)}>Cancelar</Button>
-             <Button type="submit" className="w-full sm:w-auto">Salvar Documento</Button>
+             <Button type="button" variant="outline" disabled={isUploading} className="w-full sm:w-auto" onClick={closeUploadModal}>Cancelar</Button>
+             <Button type="submit" disabled={isUploading} className="w-full sm:w-auto">{isUploading ? 'Enviando...' : 'Salvar Documento'}</Button>
           </div>
         </form>
       </Modal>
@@ -1401,7 +1439,7 @@ export function DentistPortal({
       </Modal>
       {/* Appointment Detail / Patient Quick Info Modal */}
       <Modal isOpen={!!appointmentDetail} onClose={() => setAppointmentDetail(null)} title="Detalhes do Agendamento">
-        {appointmentDetail && (
+        {appointmentDetail && detailAppointment && (
           <div className="space-y-5">
             {/* Patient header */}
             <div className="flex items-center gap-4 p-4 bg-zinc-50 rounded-xl border border-zinc-100">
@@ -1442,33 +1480,33 @@ export function DentistPortal({
               <div className="flex flex-wrap items-center gap-4 text-sm">
                 <div className="flex items-center gap-1.5 text-zinc-700">
                   <Calendar className="h-4 w-4 text-emerald-500 shrink-0" />
-                  <span className="font-medium">{formatDateDDMMYYYY(appointmentDetail.apt.date)}</span>
+                  <span className="font-medium">{formatDateDDMMYYYY(detailAppointment.date)}</span>
                 </div>
                 <div className="flex items-center gap-1.5 text-zinc-700">
                   <Clock className="h-4 w-4 text-emerald-500 shrink-0" />
-                  <span className="font-medium">{appointmentDetail.apt.time}</span>
+                  <span className="font-medium">{detailAppointment.time}</span>
                 </div>
               </div>
-              {appointmentDetail.apt.notes && (
-                <p className="text-xs text-zinc-600 mt-2 italic">{appointmentDetail.apt.notes}</p>
+              {detailAppointment.notes && (
+                <p className="text-xs text-zinc-600 mt-2 italic">{detailAppointment.notes}</p>
               )}
               <div className="mt-2">
                 <span className={cn(
                   'px-2.5 py-1 rounded-full text-xs font-medium border',
-                  statusClass[appointmentDetail.apt.status]
+                  statusClass[detailAppointment.status]
                 )}>
-                  {statusLabel[appointmentDetail.apt.status]}
+                  {statusLabel[detailAppointment.status]}
                 </span>
               </div>
             </div>
 
             {/* Actions */}
             <div className="flex flex-col gap-2 pt-2 border-t border-zinc-100">
-              {appointmentDetail.apt.status !== 'completed' && appointmentDetail.apt.status !== 'cancelled' && (
+              {isOpenAppointment(detailAppointment.status) && (
                 <Button
                   className="w-full gap-2"
                   onClick={() => {
-                    setCurrentAppointment(appointmentDetail.apt);
+                    setCurrentAppointment(detailAppointment);
                     setSelectedPatient(appointmentDetail.patient);
                     setAppointmentDetail(null);
                     setIsTreatmentModalOpen(true);
@@ -1477,6 +1515,8 @@ export function DentistPortal({
                   <CheckCircle2 className="h-4 w-4" /> Concluir Atendimento
                 </Button>
               )}
+              <NoShowButton appointment={detailAppointment}
+                patientName={appointmentDetail.patient?.name || 'Paciente'} onMarkNoShow={onMarkNoShow} />
               <Button
                 variant="outline"
                 className="w-full gap-2"

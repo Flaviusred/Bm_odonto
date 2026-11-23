@@ -1,6 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword, getAuth, signOut, connectAuthEmulator, Auth } from 'firebase/auth';
 import { getFirestore, connectFirestoreEmulator } from 'firebase/firestore';
+import { getStorage, connectStorageEmulator } from 'firebase/storage';
 import { deleteApp } from 'firebase/app';
 // @ts-ignore
 import productionFirebaseConfig from '../firebase-applet-config.json';
@@ -10,6 +11,7 @@ export const USE_EMULATOR = (import.meta as any).env?.VITE_USE_EMULATOR === 'tru
 const EMULATOR_AUTH_URL = 'http://127.0.0.1:9099';
 const EMULATOR_FIRESTORE_HOST = '127.0.0.1';
 const EMULATOR_FIRESTORE_PORT = 8080;
+const EMULATOR_STORAGE_PORT = 9199;
 
 const firebaseConfig = USE_EMULATOR
 	? {
@@ -17,7 +19,6 @@ const firebaseConfig = USE_EMULATOR
 		projectId: 'demo-bm-odonto',
 		apiKey: 'demo-api-key',
 		authDomain: 'demo-bm-odonto.firebaseapp.com',
-		storageBucket: '',
 	}
 	: productionFirebaseConfig;
 
@@ -36,10 +37,12 @@ const useNamedDatabase = Boolean(configuredDatabaseId && configuredDatabaseId !=
 
 export const db = useNamedDatabase ? getFirestore(app, configuredDatabaseId!) : getFirestore(app);
 export const  auth = getAuth(app);
+export const storage = getStorage(app);
 
 if (USE_EMULATOR) {
 	attachAuthEmulator(auth);
 	connectFirestoreEmulator(db, EMULATOR_FIRESTORE_HOST, EMULATOR_FIRESTORE_PORT);
+	connectStorageEmulator(storage, EMULATOR_FIRESTORE_HOST, EMULATOR_STORAGE_PORT);
 }
 
 const isEmailAlreadyInUseError = (error: unknown) => {

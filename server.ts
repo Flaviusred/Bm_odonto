@@ -115,6 +115,9 @@ const requireAuth = async (req: any, res: any, next: any) => {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  if (!admin.apps?.length) {
+    return res.status(503).json({ error: 'Autenticação indisponível no servidor. Verifique as credenciais Firebase Admin.' });
+  }
   const idToken = authHeader.split('Bearer ')[1];
   try {
     req.firebaseUser = await admin.auth().verifyIdToken(idToken);
@@ -253,6 +256,166 @@ app.use((req: any, _res: any, next: any) => {
     req.url = '/';
   }
   next();
+});
+
+const DOCUMENT_MAX_BYTES = 2 * 1024 * 1024;
+const documentStaffRoles = new Set(['admin', 'attendant', 'dentist']);
+
+const getDocumentRequesterRole = async (uid: string, email?: string): Promise<string | null> => {
+  if (email === 'admin@odonto.com') return 'admin';
+  const user = await db.collection('users').doc(uid).get();
+  return user.exists ? String(user.data()?.role || '') : null;
+};
+
+app.post('/api/documents', requireAuth, express.raw({ type: 'application/pdf', limit: DOCUMENT_MAX_BYTES }), async (req: any, res: any) => {
+  if (!db || !firebaseClientConfig.storageBucket) {
+    return res.status(503).json({ error: 'Armazenamento de documentos indisponível no servidor.' });
+  }
+  const { patientId, name, type } = req.query;
+  if (typeof patientId !== 'string' || !patientId || patientId.includes('/') ||
+      typeof name !== 'string' || !name.trim() || name.length > 255 ||
+      typeof type !== 'string' || !['Exame', 'Documento', 'Raio-X'].includes(type) ||
+      !Buffer.isBuffer(req.body) || req.body.length < 5 ||
+      req.body.subarray(0, 5).toString('ascii') !== '%PDF-') {
+    return res.status(400).json({ error: 'Documento inválido. Selecione um arquivo PDF válido.' });
+  }
+  let uploadedPath: string | null = null;
+  let documentId: string | null = null;
+  let commitStarted = false;
+  try {
+    const role = await getDocumentRequesterRole(req.firebaseUser.uid, req.firebaseUser.email);
+    if (!role || !documentStaffRoles.has(role)) {
+      return res.status(403).json({ error: 'Sem permissão para enviar documentos.' });
+    }
+    const patient = await db.collection('patients').doc(patientId).get();
+    if (!patient.exists) return res.status(404).json({ error: 'Paciente não encontrado.' });
+    const patientData = patient.data();
+    const patientUser = await db.collection('users').doc(patientId).get();
+    const userAuthUid = patientUser.data()?.authUid;
+    const patientAuthUid = typeof userAuthUid === 'string' && userAuthUid ? userAuthUid :
+      typeof patientData?.authUid === 'string' && patientData.authUid ? patientData.authUid : null;
+    const id = randomUUID();
+    documentId = id;
+    const storagePath = `secure-patient-documents/${id}.pdf`;
+    await admin.storage().bucket(firebaseClientConfig.storageBucket).file(storagePath)
+      .save(req.body, { resumable: false, metadata: { contentType: 'application/pdf', cacheControl: 'private, no-store' } });
+    uploadedPath = storagePath;
+    const batch = db.batch();
+    batch.create(db.collection('document_files').doc(id), { storagePath, patientAuthUid });
+    batch.create(db.collection('documents').doc(id), {
+      id, patientId, patientAuthUid, name: name.trim(), type,
+      url: `/api/documents/${id}/file`, storagePath, uploadedAt: new Date().toISOString()
+    });
+    commitStarted = true;
+    await batch.commit();
+    return res.status(201).json({ id });
+  } catch (error) {
+    if (uploadedPath) {
+      try {
+        const committed = commitStarted && documentId
+          ? (await db.collection('document_files').doc(documentId).get()).exists
+          : false;
+        if (!committed) await admin.storage().bucket(firebaseClientConfig.storageBucket).file(uploadedPath).delete();
+      } catch (cleanupError) {
+        console.error('Não foi possível verificar ou limpar o arquivo após erro no cadastro:', uploadedPath, cleanupError);
+      }
+    }
+    console.error('Falha ao salvar documento:', error);
+    return res.status(500).json({ error: 'Falha ao salvar o documento. Tente novamente.' });
+  }
+});
+
+app.get('/api/documents/:id/file', requireAuth, async (req: any, res: any) => {
+  if (!db || !firebaseClientConfig.storageBucket) {
+    return res.status(503).json({ error: 'Armazenamento de documentos indisponível no servidor.' });
+  }
+  if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) return res.status(404).json({ error: 'Documento não encontrado.' });
+  try {
+    const [fileRecord, role] = await Promise.all([
+      db.collection('document_files').doc(req.params.id).get(),
+      getDocumentRequesterRole(req.firebaseUser.uid, req.firebaseUser.email),
+    ]);
+    if (!fileRecord.exists) return res.status(404).json({ error: 'Documento não encontrado.' });
+    const fileData = fileRecord.data();
+    if (!(role && documentStaffRoles.has(role)) && fileData.patientAuthUid !== req.firebaseUser.uid) {
+      return res.status(403).json({ error: 'Sem permissão para acessar este documento.' });
+    }
+    const storagePath = `secure-patient-documents/${req.params.id}.pdf`;
+    if (fileData.storagePath !== storagePath) {
+      console.error('Caminho de documento inconsistente:', req.params.id);
+      return res.status(500).json({ error: 'Não foi possível acessar o documento.' });
+    }
+    const stream = admin.storage().bucket(firebaseClientConfig.storageBucket).file(storagePath).createReadStream();
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': 'inline', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+    stream.on('error', (error: Error) => {
+      console.error('Falha ao ler documento do Storage:', error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Falha ao abrir o documento. Tente novamente.' });
+      } else {
+        res.destroy(error);
+      }
+    });
+    res.on('close', () => {
+      if (!stream.readableEnded) stream.destroy();
+    });
+    stream.pipe(res);
+  } catch (error) {
+    console.error('Falha ao abrir documento:', error);
+    return res.status(500).json({ error: 'Falha ao abrir o documento. Tente novamente.' });
+  }
+});
+
+app.delete('/api/documents/:id', requireAuth, async (req: any, res: any) => {
+  if (!db || !firebaseClientConfig.storageBucket) {
+    return res.status(503).json({ error: 'Armazenamento de documentos indisponível no servidor.' });
+  }
+  const id = req.params.id;
+  if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id)) {
+    return res.status(400).json({ error: 'Identificador de documento inválido.' });
+  }
+  try {
+    const role = await getDocumentRequesterRole(req.firebaseUser.uid, req.firebaseUser.email);
+    if (!role || !documentStaffRoles.has(role)) {
+      return res.status(403).json({ error: 'Sem permissão para excluir documentos.' });
+    }
+    const documentRef = db.collection('documents').doc(id);
+    const fileRef = db.collection('document_files').doc(id);
+    const [documentSnapshot, fileSnapshot] = await Promise.all([documentRef.get(), fileRef.get()]);
+    if (!documentSnapshot.exists) return res.status(404).json({ error: 'Documento não encontrado.' });
+
+    const documentData = documentSnapshot.data();
+    let storagePath: string | null = null;
+    if (fileSnapshot.exists) {
+      const expectedPath = `secure-patient-documents/${id}.pdf`;
+      if (fileSnapshot.data()?.storagePath !== expectedPath) {
+        console.error('Caminho de documento inconsistente:', id);
+        return res.status(500).json({ error: 'Não foi possível verificar o arquivo do documento.' });
+      }
+      storagePath = expectedPath;
+    } else if (documentData.storagePath) {
+      const parts = String(documentData.storagePath).split('/');
+      if (parts.length !== 3 || parts[0] !== 'patient-documents' ||
+          !/^[a-zA-Z0-9_-]+$/.test(parts[1]) || parts[2] !== `${id}.pdf`) {
+        return res.status(409).json({ error: 'Não foi possível identificar com segurança o arquivo deste documento.' });
+      }
+      storagePath = parts.join('/');
+    } else if (documentData.url && !String(documentData.url).startsWith('blob:') &&
+               !String(documentData.url).startsWith('data:')) {
+      return res.status(409).json({ error: 'Este documento possui um arquivo externo sem caminho de armazenamento identificado.' });
+    }
+
+    if (storagePath) {
+      await admin.storage().bucket(firebaseClientConfig.storageBucket).file(storagePath).delete({ ignoreNotFound: true });
+    }
+    const batch = db.batch();
+    batch.delete(documentRef);
+    if (fileSnapshot.exists) batch.delete(fileRef);
+    await batch.commit();
+    return res.status(204).end();
+  } catch (error) {
+    console.error('Falha ao excluir documento:', id, error);
+    return res.status(500).json({ error: 'Falha ao excluir o documento. Tente novamente.' });
+  }
 });
 
 // Initial data structure

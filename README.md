@@ -2,6 +2,10 @@
 
 Sistema de gestão odontológica desenvolvido para o Corpo de Bombeiros Militar da Paraíba. Permite o gerenciamento de pacientes (militares e civis), agendamentos, tratamentos, dentistas, atendentes e usuários administrativos.
 
+O dashboard e os relatórios Excel/PDF apresentam quantidades de procedimentos por tipo e dentista. Os totais somam as quantidades registradas nos tratamentos pela data do tratamento, independentemente do status dos agendamentos; o filtro de período do relatório é selecionado na exportação.
+
+Na agenda e no portal do dentista, agendamentos em aberto podem ser marcados como “Não compareceu” após o horário marcado, mediante confirmação. A falta permanece no histórico e não libera o horário; não conta como atendimento concluído. Para localizar consultas passadas na agenda, utilize a opção de mostrar agendamentos passados.
+
 ---
 
 ## Tecnologias
@@ -114,7 +118,7 @@ O servidor Express sobe na porta `3000` (ou `PORT` via variável de ambiente). O
 
 ## Testar antes do deploy (modo teste com Firebase Emulator)
 
-O modo teste roda o app inteiro no seu computador usando o **Firebase Emulator** (Auth + Firestore).
+O modo teste roda o app inteiro no seu computador usando o **Firebase Emulator** (Auth + Firestore + Storage).
 Nenhum dado de produção é lido ou alterado, as regras de `firestore.rules` locais são aplicadas
 e nenhum e-mail é enviado de verdade (o conteúdo aparece no terminal).
 
@@ -133,7 +137,7 @@ npm run dev:emulador
 Ou no VS Code: *Terminal → Run Task → Testar com emulador (modo teste)*.
 
 - App: http://localhost:3000 (a aba do navegador mostra `[TESTE]`)
-- Painel do emulador (usuários e documentos): http://localhost:4000
+- Painel do emulador (usuários, documentos e arquivos): http://localhost:4000
 - Usuários de teste (senha `teste123`): `admin@teste.local`, `atendente@teste.local`,
   `dentista@teste.local`, `paciente@teste.local`
 - Os dados de teste ficam salvos em `.emulator-data/` (fora do Git). Apague a pasta para recomeçar do zero.
@@ -249,6 +253,18 @@ O CI/CD via GitHub Actions faz o deploy automaticamente a cada push na branch `m
 | `FIREBASE_PROJECT` | ID do projeto Firebase |
 | `FIREBASE_TOKEN` | Token gerado com `firebase login:ci` |
 | `VITE_SITE_URL` | URL pública do site |
+
+### Documentos do prontuário (Firebase Storage)
+
+Os PDFs (até 2 MB) são enviados pelo Express e armazenados no Firebase Storage em `secure-patient-documents/{id}.pdf`. O servidor verifica o token do Firebase Auth e o perfil no Firestore para autorizar o upload; na leitura, também permite o acesso ao paciente vinculado. O vínculo confiável do arquivo fica na coleção `document_files`, inacessível aos clientes pelas regras do Firestore. Novos arquivos não usam URLs públicas de download.
+
+O Storage deve estar habilitado e o servidor deve ter credenciais Firebase Admin com acesso ao Auth, ao banco Firestore configurado e ao bucket. Em desenvolvimento, configure `FIREBASE_SERVICE_ACCOUNT` ou `GOOGLE_APPLICATION_CREDENTIALS` em `.env.local` (não versionado) com um caminho válido para a máquina local. O login na Firebase CLI não configura automaticamente essas credenciais. Reinicie o servidor após alterar a configuração.
+
+Publique o servidor Express e o frontend para ativar a mudança. As regras do Storage continuam em `storage.rules`; o acesso direto ao novo caminho não é permitido. Arquivos armazenados anteriormente com URLs de download continuam usando essas URLs e não são migrados automaticamente; quem possuir uma URL com token pode acessá-la.
+
+Documentos enviados antes desta mudança (URL `blob:`) não podem ser recuperados; na lista aparecem como "Arquivo indisponível" / "Reenviar" e exigem novo upload.
+
+Administradores, atendentes e dentistas podem excluir documentos após confirmação. O Express remove o arquivo do Storage e os registros do Firestore; documentos antigos em `blob:` ou `data:` têm apenas o registro removido. Arquivos externos sem caminho de Storage identificado não são excluídos automaticamente.
 
 ---
 

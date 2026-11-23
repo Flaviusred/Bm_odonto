@@ -30,6 +30,7 @@ import { cn } from '../lib/utils';
 import { formatDateDDMMYYYY, parseDate, parseDateTime } from '../lib/dateUtils';
 import { Patient, Appointment, Treatment, Dentist } from '../types';
 import { PROCEDURE_LABELS, ProcedureType } from '../constants';
+import { getProcedureReport, getProcedureTypeTotals } from '../lib/procedureReport';
 
 interface DashboardProps {
   patients: Patient[];
@@ -184,6 +185,7 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
     'cancelled': 'Cancelado',
     'completed': 'Concluído',
     'blocked': 'Bloqueado',
+    'no_show': 'Não compareceu',
   };
 
   const statusData = useMemo(() => {
@@ -258,6 +260,12 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
     () => procedureQuantityData.reduce((total, period) => total + Number(period.total || 0), 0),
     [procedureQuantityData]
   );
+
+  const procedureReport = useMemo(() => getProcedureReport(
+    treatments, dentists, periodStartDate,
+    periodStartDate ? new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999) : null,
+  ), [treatments, dentists, periodStartDate, today]);
+  const procedureTypes = useMemo(() => getProcedureTypeTotals(procedureReport), [procedureReport]);
 
   const recentAppointments = appointments
     .sort((a, b) => parseDateTime(b.date, b.time).getTime() - parseDateTime(a.date, a.time).getTime())
@@ -473,6 +481,46 @@ export function Dashboard({ patients, appointments, treatments, dentists, view =
                   </BarChart>
                 </MeasuredChart>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {(view === 'overview' || view === 'period' || view === 'by-dentist') && (
+        <Card className="border-none shadow-sm bg-white">
+          <CardHeader>
+            <CardTitle className="text-lg font-semibold flex items-center gap-2">
+              <Stethoscope className="h-5 w-5 text-emerald-500" />
+              Procedimentos por tipo e dentista
+            </CardTitle>
+            <p className="text-sm text-zinc-500">Soma das quantidades registradas nos tratamentos, pela data do tratamento, no período selecionado.</p>
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {procedureTypes.length === 0 ? (
+              <p className="text-sm text-zinc-500">Nenhum procedimento registrado no período.</p>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {procedureTypes.map(item => (
+                    <div key={item.type} className="rounded-xl border border-zinc-100 bg-zinc-50 px-4 py-3">
+                      <p className="text-sm text-zinc-600">{item.type}</p>
+                      <p className="text-2xl font-bold text-zinc-900">{item.quantity}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm text-left">
+                    <thead><tr className="border-b border-zinc-200 text-zinc-500">
+                      <th className="p-3">Dentista</th><th className="p-3">ID do dentista</th><th className="p-3">Procedimento</th><th className="p-3 text-right">Quantidade</th>
+                    </tr></thead>
+                    <tbody>{procedureReport.map(row => (
+                      <tr key={`${row.dentistId}:${row.type}`} className="border-b border-zinc-100">
+                        <td className="p-3">{row.dentist}</td><td className="p-3">{row.dentistId || 'Não informado'}</td><td className="p-3">{row.type}</td><td className="p-3 text-right">{row.quantity}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       )}
