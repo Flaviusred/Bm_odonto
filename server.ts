@@ -261,8 +261,7 @@ app.use((req: any, _res: any, next: any) => {
 const DOCUMENT_MAX_BYTES = 2 * 1024 * 1024;
 const documentStaffRoles = new Set(['admin', 'attendant', 'dentist']);
 
-const getDocumentRequesterRole = async (uid: string, email?: string): Promise<string | null> => {
-  if (email === 'admin@odonto.com') return 'admin';
+const getDocumentRequesterRole = async (uid: string, _email?: string): Promise<string | null> => {
   const user = await db.collection('users').doc(uid).get();
   return user.exists ? String(user.data()?.role || '') : null;
 };
@@ -1114,8 +1113,6 @@ app.post('/api/admin/auth/create-user', requireAuth, async (req: any, res: any) 
 
 app.post('/api/admin/users/create', requireAuth, async (req: any, res: any) => {
   const requesterUid = String(req.firebaseUser?.uid || '').trim();
-  const requesterEmail = String(req.firebaseUser?.email || '').trim().toLowerCase();
-  const bootstrapAdminEmail = String(process.env.BOOTSTRAP_ADMIN_EMAIL || 'admin@odonto.com').trim().toLowerCase();
 
   const name = String(req.body?.name || '').trim();
   const email = String(req.body?.email || '').trim().toLowerCase();
@@ -1145,7 +1142,7 @@ app.post('/api/admin/users/create', requireAuth, async (req: any, res: any) => {
 
   try {
     const requesterRole = await getRoleForFirebaseUid(requesterUid);
-    const canManageUsers = requesterRole === 'admin' || requesterRole === 'attendant' || (!!bootstrapAdminEmail && requesterEmail === bootstrapAdminEmail);
+    const canManageUsers = requesterRole === 'admin' || requesterRole === 'attendant';
     if (!canManageUsers) {
       return res.status(403).json({ error: 'Sem permissão para criar usuários.' });
     }
