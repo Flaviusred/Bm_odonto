@@ -35,10 +35,10 @@ const db = databaseId && databaseId !== '(default)' ? getFirestore(app, database
 const now = new Date().toISOString();
 
 const people = [
-  { uid: 'teste-admin', name: 'Admin Teste', email: 'admin@teste.local', role: 'admin', cpf: '11111111111' },
-  { uid: 'teste-atendente', name: 'Atendente Teste', email: 'atendente@teste.local', role: 'attendant', cpf: '22222222222' },
-  { uid: 'teste-dentista', name: 'Dentista Teste', email: 'dentista@teste.local', role: 'dentist', cpf: '33333333333' },
-  { uid: 'teste-paciente', name: 'Paciente Teste', email: 'paciente@teste.local', role: 'patient', cpf: '44444444444' },
+  { uid: 'teste-admin', name: 'Admin Teste', email: 'admin@teste.local', role: 'admin', cpf: '52998224725' },
+  { uid: 'teste-atendente', name: 'Atendente Teste', email: 'atendente@teste.local', role: 'attendant', cpf: '11144477735' },
+  { uid: 'teste-dentista', name: 'Dentista Teste', email: 'dentista@teste.local', role: 'dentist', cpf: '98765432100' },
+  { uid: 'teste-paciente', name: 'Paciente Teste', email: 'paciente@teste.local', role: 'patient', cpf: '12345678909' },
 ] as const;
 
 const ensureAuthUser = async (p: (typeof people)[number]) => {
@@ -72,12 +72,12 @@ const main = async () => {
 
   await db.collection('dentists').doc('teste-dentista').set({
     id: 'teste-dentista', authUid: 'teste-dentista', name: 'Dentista Teste', email: 'dentista@teste.local',
-    phone: '(83) 99999-0000', specialty: 'Geral', cro: '12345', cpf: '33333333333', createdAt: now, isActive: true,
+    phone: '(83) 99999-0000', specialty: 'Geral', cro: '12345', cpf: '98765432100', createdAt: now, isActive: true,
   }, { merge: true });
 
   await db.collection('patients').doc('teste-paciente').set({
     id: 'teste-paciente', authUid: 'teste-paciente', name: 'Paciente Teste', email: 'paciente@teste.local',
-    phone: '(83) 99999-0000', cpf: '44444444444', birthDate: '1990-01-01', address: 'Rua de Teste, 100',
+    phone: '(83) 99999-0000', cpf: '12345678909', birthDate: '1990-01-01', address: 'Rua de Teste, 100',
     createdAt: now, isActive: true, patientType: 'civil',
   }, { merge: true });
 
@@ -89,7 +89,7 @@ const main = async () => {
   }, { merge: true });
 
   console.log('\nDados de teste prontos no emulador. Logins (senha para todos: ' + PASSWORD + '):');
-  for (const p of people) console.log(`  ${p.role.padEnd(10)} ${p.email}`);
+  for (const p of people) console.log(`  ${p.role.padEnd(10)} ${p.email.padEnd(24)} CPF ${p.cpf}`);
   console.log('');
 };
 
