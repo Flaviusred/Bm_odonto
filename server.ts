@@ -860,13 +860,27 @@ app.post('/api/admin/users/:id/password', requireAuth, async (req: any, res: any
 
   try {
     const requesterRole = await getRoleForFirebaseUid(requesterUid);
-    if (requesterRole !== 'admin') {
-      return res.status(403).json({ error: 'Apenas administradores podem alterar senha de outros usuários.' });
-    }
 
     const targetUserRef = db.collection('users').doc(targetUserId);
     const targetUserSnap = await targetUserRef.get();
     const targetUserData = targetUserSnap.exists ? (targetUserSnap.data() || {}) : {};
+    const targetPatientSnap = await db.collection('patients').doc(targetUserId).get();
+    const targetPatientData = targetPatientSnap.exists ? (targetPatientSnap.data() || {}) : null;
+
+    // Dependentes não têm login próprio (o e-mail costuma ser o do titular): trocar a senha
+    // aqui alteraria a conta do titular.
+    if (targetPatientData && (targetPatientData as any).dependentOf) {
+      return res.status(400).json({ error: 'Dependentes não têm login próprio. Redefina a senha do titular.' });
+    }
+
+    // Admin pode redefinir a senha de qualquer usuário; atendente, apenas de pacientes.
+    const targetIsPatient = targetUserSnap.exists
+      ? (targetUserData as any).role === 'patient'
+      : !!targetPatientData;
+    const canReset = requesterRole === 'admin' || (requesterRole === 'attendant' && targetIsPatient);
+    if (!canReset) {
+      return res.status(403).json({ error: 'Sem permissão para alterar a senha deste usuário.' });
+    }
 
     const emailCandidates = uniqueNonEmptyStrings([
       targetEmail,
