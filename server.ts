@@ -7,7 +7,7 @@ import nodemailer from "nodemailer";
 import { randomUUID, createHmac, timingSafeEqual } from "crypto";
 import dotenv from "dotenv";
 import adminModule from 'firebase-admin';
-import { getFirestore } from 'firebase-admin/firestore';
+import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 // Some environments/packagers expose firebase-admin as a default export,
 // others as the module namespace. Normalize to `admin` variable.
 const admin: any = (adminModule as any)?.default || adminModule;
@@ -588,15 +588,19 @@ const findPasswordResetTarget = async (email: string, cpf: string) => {
   return null;
 };
 
-const updatePasswordMirrorIfExists = async (collectionName: 'patients' | 'dentists' | 'attendants', userId: string, newPassword: string) => {
-  try {
-    const ref = db.collection(collectionName).doc(userId);
-    const snap = await ref.get();
-    if (snap.exists) {
-      await ref.update({ password: newPassword });
+// A senha vive apenas no Firebase Auth. Após trocá-la lá, remove qualquer cópia antiga em texto
+// puro que tenha ficado nos documentos do Firestore (users/patients/dentists/attendants).
+const clearStoredPasswords = async (userId: string) => {
+  for (const collectionName of ['users', 'patients', 'dentists', 'attendants']) {
+    try {
+      const ref = db.collection(collectionName).doc(userId);
+      const snap = await ref.get();
+      if (snap.exists && (snap.data() || {}).password !== undefined) {
+        await ref.update({ password: FieldValue.delete() });
+      }
+    } catch (err) {
+      console.warn(`Falha ao remover senha armazenada em ${collectionName}/${userId}:`, err);
     }
-  } catch (err) {
-    console.warn(`Falha ao atualizar senha espelhada em ${collectionName}/${userId}:`, err);
   }
 };
 
@@ -946,14 +950,12 @@ app.post('/api/admin/users/:id/password', requireAuth, async (req: any, res: any
 
     await targetUserRef.set({
       authUid: updatedAuthUid,
-      password: newPassword,
+      password: FieldValue.delete(),
       passwordResetToken: '',
       passwordResetExpires: null,
     }, { merge: true });
 
-    await updatePasswordMirrorIfExists('patients', targetUserId, newPassword);
-    await updatePasswordMirrorIfExists('dentists', targetUserId, newPassword);
-    await updatePasswordMirrorIfExists('attendants', targetUserId, newPassword);
+    await clearStoredPasswords(targetUserId);
 
     return res.json({ status: 'ok' });
   } catch (err) {
@@ -1423,15 +1425,13 @@ app.post('/api/reset-password/complete', async (req, res) => {
     }
 
     await userRef.set({
-      password: newPassword,
+      password: FieldValue.delete(),
       passwordResetToken: '',
       passwordResetExpires: null,
       authUid: resolvedAuthUid,
     }, { merge: true });
 
-    await updatePasswordMirrorIfExists('patients', uid, newPassword);
-    await updatePasswordMirrorIfExists('dentists', uid, newPassword);
-    await updatePasswordMirrorIfExists('attendants', uid, newPassword);
+    await clearStoredPasswords(uid);
 
     return res.json({ status: 'ok' });
   } catch (err) {
@@ -1576,10 +1576,8 @@ app.post('/api/admin/set-password', requireAuth, requireRole('admin'), async (re
       }
     }
 
-    await userRef.set({ password: newPassword, authUid: resolvedAuthUid }, { merge: true });
-    await updatePasswordMirrorIfExists('patients', uid, newPassword);
-    await updatePasswordMirrorIfExists('dentists', uid, newPassword);
-    await updatePasswordMirrorIfExists('attendants', uid, newPassword);
+    await userRef.set({ password: FieldValue.delete(), authUid: resolvedAuthUid }, { merge: true });
+    await clearStoredPasswords(uid);
 
     return res.json({ status: 'ok', authSynced: authUpdated });
   } catch (err) {

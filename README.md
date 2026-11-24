@@ -145,6 +145,26 @@ Ou no VS Code: *Terminal → Run Task → Testar com emulador (modo teste)*.
 
 > Lembrete: qualquer push na branch `main` faz deploy automático. Teste em outra branch e só depois faça o merge.
 
+## Remover senhas antigas em texto puro do Firestore
+
+As senhas ficam apenas no Firebase Auth. Para apagar cópias antigas gravadas nos documentos
+(`users`, `patients`, `dentists`, `attendants`):
+
+```bash
+npm run senhas:simular
+```
+
+Mostra o que seria removido, sem alterar nada. Para aplicar:
+
+```bash
+npm run senhas:aplicar
+```
+
+- Só remove a senha de quem tem conta no Firebase Auth; contas antigas sem Auth são mantidas e listadas.
+- Precisa de credencial de produção: `FIREBASE_SERVICE_ACCOUNT_PATH=caminho/da/service-account.json`
+  (ou `FIREBASE_SERVICE_ACCOUNT` com o JSON) no `.env.local`.
+- Nunca imprime senhas.
+
 ## Variáveis de ambiente
 
 Crie um arquivo `.env` na raiz com as seguintes variáveis:

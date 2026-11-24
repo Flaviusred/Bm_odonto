@@ -16,7 +16,9 @@
     "lint": "tsc --noEmit",
     "notifications:check-overdue": "tsx scripts/check-overdue-appointments.ts",
     "cleanup:empty-users:dry": "tsx scripts/cleanup-empty-user-docs.ts",
-    "cleanup:empty-users:apply": "tsx scripts/cleanup-empty-user-docs.ts --apply"
+    "cleanup:empty-users:apply": "tsx scripts/cleanup-empty-user-docs.ts --apply",
+    "senhas:simular": "tsx scripts/remove-plaintext-passwords.ts",
+    "senhas:aplicar": "tsx scripts/remove-plaintext-passwords.ts --apply"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

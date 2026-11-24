@@ -1287,7 +1287,8 @@ export default function App() {
         createdPatientName = newPatient.name;
 
         // include authUid on patient document when available
-        const patientWithAuth: any = stripUndefinedDeep({ ...newPatient, ...(authUid ? { authUid } : {}) });
+        // A senha fica só no Firebase Auth; nunca é gravada no documento do paciente.
+        const patientWithAuth: any = stripUndefinedDeep({ ...stripPassword(newPatient as any), ...(authUid ? { authUid } : {}) });
         await setDoc(doc(db, 'patients', effectiveId), patientWithAuth);
 
         // Only create a corresponding `users` document for titulars (not for dependents)
