@@ -1287,7 +1287,8 @@ export default function App() {
         createdPatientName = newPatient.name;
 
         // include authUid on patient document when available
-        const patientWithAuth: any = stripUndefinedDeep({ ...newPatient, ...(authUid ? { authUid } : {}) });
+        // A senha fica só no Firebase Auth; nunca é gravada no documento do paciente.
+        const patientWithAuth: any = stripUndefinedDeep({ ...stripPassword(newPatient as any), ...(authUid ? { authUid } : {}) });
         await setDoc(doc(db, 'patients', effectiveId), patientWithAuth);
 
         // Only create a corresponding `users` document for titulars (not for dependents)
@@ -1336,6 +1337,19 @@ export default function App() {
     }
   };
 
+  // Define uma nova senha para o paciente no Firebase Auth (via servidor). Lança erro se falhar,
+  // para a tela só exibir a senha quando ela realmente passou a valer.
+  const resetPatientPassword = async (patient: Patient, newPassword: string) => {
+    await runWithLoading(async () => {
+      await syncAuthPassword(patient.id, newPassword, patient.email);
+      // Também envia o link do Firebase para o paciente criar uma senha própria, se preferir.
+      if (patient.email) {
+        await sendPasswordResetEmail(auth, patient.email.trim().toLowerCase()).catch(() => {});
+      }
+    });
+    logAction('Edição', 'patient', patient.id, `Nova senha gerada para o paciente ${patient.name}.`);
+  };
+
   const updatePatient = async (updated: Patient) => {
     try {
       await runWithLoading(async () => {
@@ -1343,9 +1357,9 @@ export default function App() {
         await setDoc(doc(db, 'patients', updated.id), safePatient, { merge: true });
         await setDoc(doc(db, 'patients', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
 
-        // Em vez de persistir senha em texto, envia link de redefinição.
+        // Senha informada no formulário: grava apenas no Firebase Auth (nunca no Firestore).
         if ((updated as any).password && updated.email) {
-          await sendPasswordResetEmail(auth, updated.email.toLowerCase()).catch(() => {});
+          await syncAuthPassword(updated.id, String((updated as any).password), updated.email);
           await setDoc(doc(db, 'users', updated.id), { password: deleteField() }, { merge: true }).catch(() => {});
         }
       });
@@ -2819,6 +2833,7 @@ export default function App() {
                   onAddPatient={addPatient}
                   onDeletePatient={deletePatient}
                   onUpdatePatient={updatePatient}
+                  onResetPatientPassword={resetPatientPassword}
                   onAddDocument={addDocument}
                   onTabChange={setActiveTab}
                 />

@@ -138,12 +138,34 @@ Ou no VS Code: *Terminal → Run Task → Testar com emulador (modo teste)*.
 
 - App: http://localhost:3000 (a aba do navegador mostra `[TESTE]`)
 - Painel do emulador (usuários, documentos e arquivos): http://localhost:4000
+  - Dados do Firestore (o app usa um banco com nome, não o `(default)`):
+    http://localhost:4000/firestore/ai-studio-f268cd8f-e6a5-4bba-b421-df1c4dc1d11c/data
 - Usuários de teste (senha `teste123`): `admin@teste.local`, `atendente@teste.local`,
   `dentista@teste.local`, `paciente@teste.local`
 - Os dados de teste ficam salvos em `.emulator-data/` (fora do Git). Apague a pasta para recomeçar do zero.
 - Para parar: `Ctrl+C` no terminal.
 
 > Lembrete: qualquer push na branch `main` faz deploy automático. Teste em outra branch e só depois faça o merge.
+
+## Remover senhas antigas em texto puro do Firestore
+
+As senhas ficam apenas no Firebase Auth. Para apagar cópias antigas gravadas nos documentos
+(`users`, `patients`, `dentists`, `attendants`):
+
+```bash
+npm run senhas:simular
+```
+
+Mostra o que seria removido, sem alterar nada. Para aplicar:
+
+```bash
+npm run senhas:aplicar
+```
+
+- Só remove a senha de quem tem conta no Firebase Auth; contas antigas sem Auth são mantidas e listadas.
+- Precisa de credencial de produção: `FIREBASE_SERVICE_ACCOUNT_PATH=caminho/da/service-account.json`
+  (ou `FIREBASE_SERVICE_ACCOUNT` com o JSON) no `.env.local`.
+- Nunca imprime senhas.
 
 ## Variáveis de ambiente
 

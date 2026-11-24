@@ -26,6 +26,7 @@ interface PatientListProps {
   onAddPatient: (patient: Omit<Patient, 'id' | 'createdAt' | 'isActive'> & { id?: string }) => void;
   onDeletePatient: (id: string) => void;
   onUpdatePatient: (patient: Patient) => void;
+  onResetPatientPassword: (patient: Patient, newPassword: string) => Promise<void>;
   onAddDocument: (doc: Omit<PatientDocument, 'id' | 'uploadedAt' | 'url' | 'storagePath'> & { file: File }) => Promise<void>;
   onTabChange?: (tab: string) => void;
 }
@@ -39,6 +40,7 @@ export function PatientList({
   onAddPatient, 
   onDeletePatient, 
   onUpdatePatient,
+  onResetPatientPassword,
   onAddDocument,
   onTabChange
 }: PatientListProps) {
@@ -52,6 +54,7 @@ export function PatientList({
       onAddPatient={onAddPatient} 
       onDeletePatient={onDeletePatient} 
       onUpdatePatient={onUpdatePatient}
+      onResetPatientPassword={onResetPatientPassword}
       onAddDocument={onAddDocument}
       onTabChange={onTabChange}
     />
@@ -67,6 +70,7 @@ function PatientListContent({
   onAddPatient, 
   onDeletePatient, 
   onUpdatePatient,
+  onResetPatientPassword,
   onAddDocument,
   onTabChange
 }: PatientListProps) {
@@ -383,16 +387,29 @@ function PatientListContent({
     }
   };
 
-  const executeAction = () => {
+  // Senha aleatória criptograficamente segura, sem caracteres ambíguos (0/O, 1/l/I).
+  const generateSecurePassword = (length = 10) => {
+    const chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const values = new Uint32Array(length);
+    crypto.getRandomValues(values);
+    return Array.from(values, (v) => chars[v % chars.length]).join('');
+  };
+
+  const executeAction = async () => {
     if (!confirmAction) return;
-    if (confirmAction.type === 'disable') {
-      onUpdatePatient({ ...confirmAction.patient, isActive: !confirmAction.patient.isActive });
-    } else {
-      const newPassword = Math.random().toString(36).substr(2, 8);
-      setGeneratedPassword({ password: newPassword, email: confirmAction.patient.email });
-      onUpdatePatient({ ...confirmAction.patient, password: newPassword });
-    }
+    const { type, patient } = confirmAction;
     setConfirmAction(null);
+    if (type === 'disable') {
+      onUpdatePatient({ ...patient, isActive: !patient.isActive });
+      return;
+    }
+    const newPassword = generateSecurePassword();
+    try {
+      await onResetPatientPassword(patient, newPassword);
+      setGeneratedPassword({ password: newPassword, email: patient.email });
+    } catch (error) {
+      alert(`Não foi possível gerar a nova senha: ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   const getDentistName = (id: string) => dentists.find(d => d.id === id)?.name || 'Dentista';
@@ -713,7 +730,8 @@ function PatientListContent({
             <p className="text-2xl font-mono font-bold tracking-wider">{generatedPassword?.password}</p>
           </div>
           <p className="text-sm text-zinc-500 text-center">
-            Um email foi enviado para <strong>{generatedPassword?.email}</strong> com estas instruções.
+            A senha já está valendo para o login <strong>{generatedPassword?.email}</strong>. Informe-a ao paciente.
+            Também enviamos para esse e-mail um link para ele criar uma senha própria, se preferir.
           </p>
           <div className="flex justify-between gap-2">
             <Button variant="outline" onClick={() => setGeneratedPassword(null)}>Fechar</Button>

@@ -90,7 +90,8 @@ const main = async () => {
 
   console.log('\nDados de teste prontos no emulador. Logins (senha para todos: ' + PASSWORD + '):');
   for (const p of people) console.log(`  ${p.role.padEnd(10)} ${p.email.padEnd(24)} CPF ${p.cpf}`);
-  console.log('');
+  console.log(`\nApp: http://localhost:3000`);
+  console.log(`Dados do Firestore: http://localhost:4000/firestore/${databaseId || 'default'}/data\n`);
 };
 
 main().then(() => process.exit(0)).catch((err) => {
