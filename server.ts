@@ -1158,7 +1158,7 @@ app.post('/api/admin/users/create', requireAuth, async (req: any, res: any) => {
 
   try {
     const requesterRole = await getRoleForFirebaseUid(requesterUid);
-    const canManageUsers = requesterRole === 'admin' || requesterRole === 'attendant';
+    const canManageUsers = requesterRole === 'admin' || (requesterRole === 'attendant' && role !== 'admin');
     if (!canManageUsers) {
       return res.status(403).json({ error: 'Sem permissão para criar usuários.' });
     }
@@ -1250,11 +1250,23 @@ app.get("/api/data", requireAuth, requireRole('admin'), (req: any, res: any) => 
   res.json(getData());
 });
 
-app.post("/api/send-email", async (req, res) => {
+app.post("/api/send-email", requireAuth, async (req: any, res: any) => {
   const { to, subject, text, html } = req.body;
   if (!to || String(to).trim() === '') {
     console.warn('/api/send-email called without recipient');
     return res.status(400).json({ error: 'Recipient (to) is required' });
+  }
+  // Equipe envia para qualquer destinatário; paciente só para o próprio e-mail de login.
+  const requesterUid = String(req.firebaseUser?.uid || '');
+  const requesterRole = await getRoleForFirebaseUid(requesterUid);
+  const isStaffRequester = ['admin', 'attendant', 'dentist'].includes(String(requesterRole));
+  const recipient = String(to).trim().toLowerCase();
+  const requesterEmail = String(req.firebaseUser?.email || '').trim().toLowerCase();
+  if (!isStaffRequester && (!requesterEmail || recipient !== requesterEmail)) {
+    return res.status(403).json({ error: 'Sem permissão para enviar e-mail para este destinatário.' });
+  }
+  if (isRateLimited(`send-email:${requesterUid}`, isStaffRequester ? 200 : 20, 60 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Limite de envio de e-mails atingido. Tente novamente mais tarde.' });
   }
   console.log(`/api/send-email called -> to=${to} html=${!!html} text=${!!text} subject=${subject}`);
   appendDebugLog(`/api/send-email called -> to=${to} html=${!!html} text=${!!text} subject=${subject}`);
@@ -1658,7 +1670,7 @@ app.get('/api/google/status', requireAuth, async (req: any, res: any) => {
   }
 });
 
-app.get("/api/cbmpb/:identifier", async (req, res) => {
+app.get("/api/cbmpb/:identifier", requireAuth, requireRole('admin', 'attendant', 'dentist'), async (req: any, res: any) => {
   // Limpar o identificador para garantir que apenas números sejam enviados
   const identifier = req.params.identifier.replace(/\D/g, '');
   const rawToken = process.env.CBMPB_API_TOKEN;
@@ -1775,10 +1787,27 @@ app.get('/api/monitor/recent', requireAuth, requireRole('admin'), async (req: an
 });
 
 // API: request server to sync a single appointment to connected Google Calendars
-app.post('/api/sync-appointment', async (req, res) => {
-  const apt = req.body?.appointment;
-  if (!apt || !apt.id) return res.status(400).json({ error: 'appointment (with id) is required' });
+app.post('/api/sync-appointment', requireAuth, async (req: any, res: any) => {
+  const appointmentId = String(req.body?.appointment?.id || '').trim();
+  if (!appointmentId || appointmentId.includes('/')) return res.status(400).json({ error: 'appointment (with id) is required' });
   try {
+    // Usa os dados gravados no Firestore, não os enviados pelo navegador, para que ninguém
+    // injete eventos arbitrários no Google Agenda de um dentista.
+    if (!db) return res.status(503).json({ error: 'Firestore indisponível no servidor.' });
+    const aptSnap = await db.collection('appointments').doc(appointmentId).get();
+    if (!aptSnap.exists) return res.status(404).json({ error: 'Agendamento não encontrado.' });
+    const apt: any = { ...(aptSnap.data() || {}), id: aptSnap.id };
+
+    const requesterUid = String(req.firebaseUser?.uid || '');
+    const requesterEmail = String(req.firebaseUser?.email || '').trim().toLowerCase();
+    const requesterRole = await getRoleForFirebaseUid(requesterUid);
+    const isStaffRequester = ['admin', 'attendant', 'dentist'].includes(String(requesterRole));
+    const isOwnAppointment = apt.patientAuthUid === requesterUid
+      || (!!requesterEmail && String(apt.patientEmail || '').trim().toLowerCase() === requesterEmail);
+    if (!isStaffRequester && !isOwnAppointment) {
+      return res.status(403).json({ error: 'Sem permissão para sincronizar este agendamento.' });
+    }
+
     const data = getData();
     const dentist = (data.dentists || []).find((d: any) => d.id === apt.dentistId);
     const patient = (data.patients || []).find((p: any) => p.id === apt.patientId);

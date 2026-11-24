@@ -29,6 +29,7 @@ import { Mail, Lock, Calendar, XCircle, Users } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
 import { emailService } from './services/emailService';
 import { API_BASE, safeRandomUUID, validateCPF } from './lib/utils';
+import { authFetch } from './lib/api';
 import { canAccessTab, getDefaultTabForUser, isDentistTab, isPatientTab } from './lib/permissions';
 import LoadingOverlay from './components/LoadingOverlay';
 import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
@@ -446,7 +447,11 @@ export default function App() {
       ]);
 
       subscribeAll('announcements', setAnnouncements);
-      subscribeAll('users', setUsers);
+      // Paciente lê apenas os próprios documentos em `users` (as regras não liberam a coleção inteira).
+      subscribeUnion('users', (data) => setUsers(normalizeUsersCollection(data)), [
+        { key: 'byAuthUid', filters: [where('authUid', '==', firebaseAuthUid)] },
+        ...(normalizedEmail ? [{ key: 'byEmail', filters: [where('email', '==', normalizedEmail)] }] : []),
+      ]);
     } else {
       // Staff: acesso completo
       const staffCollections: Array<{ name: string; setter: (data: any[]) => void }> = [
@@ -1797,7 +1802,7 @@ export default function App() {
 
       // Request server to sync this appointment to connected Google Calendars
       try {
-        await fetch(`${API_BASE}/api/sync-appointment`, {
+        await authFetch('/api/sync-appointment', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ appointment: newApt })
@@ -1819,7 +1824,7 @@ export default function App() {
         const apt = appointments.find(a => a.id === id);
         if (apt) {
           const syncApt = { ...apt, status };
-          await fetch(`${API_BASE}/api/sync-appointment`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appointment: syncApt }) });
+          await authFetch('/api/sync-appointment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appointment: syncApt }) });
         }
       } catch (syncErr) {
         console.warn('Failed to request calendar sync on status update', syncErr);
@@ -1843,7 +1848,7 @@ export default function App() {
     });
     logAction('Atualização de Status', 'appointment', id, 'Paciente não compareceu ao agendamento.');
     try {
-      const response = await fetch(`${API_BASE}/api/sync-appointment`, {
+      const response = await authFetch('/api/sync-appointment', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ appointment: updated }),
       });
@@ -1881,7 +1886,7 @@ export default function App() {
       }
       // Request server to sync updated appointment
       try {
-        await fetch(`${API_BASE}/api/sync-appointment`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appointment: updatedAppointment }) });
+        await authFetch('/api/sync-appointment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ appointment: updatedAppointment }) });
       } catch (syncErr) {
         console.warn('Failed to request calendar sync on update', syncErr);
       }
