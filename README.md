@@ -138,6 +138,8 @@ Ou no VS Code: *Terminal → Run Task → Testar com emulador (modo teste)*.
 
 - App: http://localhost:3000 (a aba do navegador mostra `[TESTE]`)
 - Painel do emulador (usuários, documentos e arquivos): http://localhost:4000
+  - Dados do Firestore (o app usa um banco com nome, não o `(default)`):
+    http://localhost:4000/firestore/ai-studio-f268cd8f-e6a5-4bba-b421-df1c4dc1d11c/data
 - Usuários de teste (senha `teste123`): `admin@teste.local`, `atendente@teste.local`,
   `dentista@teste.local`, `paciente@teste.local`
 - Os dados de teste ficam salvos em `.emulator-data/` (fora do Git). Apague a pasta para recomeçar do zero.
