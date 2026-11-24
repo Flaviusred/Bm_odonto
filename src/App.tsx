@@ -2171,10 +2171,9 @@ export default function App() {
                     label="Email" 
                     name="email"
                     type="email" 
-                    placeholder="admin@odonto.com ou paciente@odonto.com" 
+                    placeholder="seu@email.com" 
                     className="pl-10"
                     autoComplete="username"
-                    defaultValue="admin@odonto.com"
                     required 
                   />
                 </div>

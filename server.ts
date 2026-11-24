@@ -4,7 +4,7 @@ import path from "path";
 import fs from "fs";
 import cron from "node-cron";
 import nodemailer from "nodemailer";
-import { randomUUID } from "crypto";
+import { randomUUID, createHmac, timingSafeEqual } from "crypto";
 import dotenv from "dotenv";
 import adminModule from 'firebase-admin';
 import { getFirestore } from 'firebase-admin/firestore';
@@ -25,6 +25,17 @@ if (fs.existsSync(localEnvPath)) {
   dotenv.config({ path: localEnvPath, override: true });
 }
 
+// Modo de teste local: quando o Firebase Emulator está ativo (variáveis definidas pelo
+// `firebase emulators:exec`), o servidor nunca usa credenciais nem dados de produção.
+const IS_EMULATOR = Boolean(process.env.FIRESTORE_EMULATOR_HOST && process.env.FIREBASE_AUTH_EMULATOR_HOST);
+const EMULATOR_PROJECT_ID = 'demo-bm-odonto';
+if (IS_EMULATOR) {
+  // Ignora credenciais reais da máquina (ex.: GOOGLE_APPLICATION_CREDENTIALS apontando para a
+  // service account de produção): o emulador não precisa delas.
+  delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  console.log(`*** MODO TESTE: usando Firebase Emulator (Firestore ${process.env.FIRESTORE_EMULATOR_HOST}, Auth ${process.env.FIREBASE_AUTH_EMULATOR_HOST}). Nenhum dado de produção é acessado. ***`);
+}
+
 // Lê configurações do Firebase client config para reutilizar projectId e databaseId no Admin SDK
 let firebaseClientConfig: any = {};
 try {
@@ -36,7 +47,9 @@ try {
   console.warn('Failed to read firebase-applet-config.json:', e);
 }
 
-const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || firebaseClientConfig.projectId || '';
+const FIREBASE_PROJECT_ID = IS_EMULATOR
+  ? EMULATOR_PROJECT_ID
+  : (process.env.FIREBASE_PROJECT_ID || firebaseClientConfig.projectId || '');
 const FIREBASE_DATABASE_ID = process.env.FIREBASE_DATABASE_ID || ((): string => {
   const id = (firebaseClientConfig.firestoreDatabaseId || '').trim();
   return (id && id !== '(default)') ? id : '';
@@ -48,7 +61,7 @@ try {
   if (apps.length === 0) {
     const baseConfig: any = {};
     if (FIREBASE_PROJECT_ID) baseConfig.projectId = FIREBASE_PROJECT_ID;
-    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    if (process.env.FIREBASE_SERVICE_ACCOUNT && !IS_EMULATOR) {
       const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
       admin.initializeApp({ ...baseConfig, credential: admin.credential.cert(serviceAccount as any) });
     } else {
@@ -138,6 +151,37 @@ const getRoleForFirebaseUid = async (firebaseUid: string): Promise<string | null
   }
 };
 
+// Exige que o usuário autenticado (requireAuth antes) tenha um dos papéis informados.
+const requireRole = (...roles: string[]) => async (req: any, res: any, next: any) => {
+  const uid = String(req.firebaseUser?.uid || '').trim();
+  const role = uid ? await getRoleForFirebaseUid(uid) : null;
+  if (!role || !roles.includes(role)) {
+    return res.status(403).json({ error: 'Sem permissão para esta operação.' });
+  }
+  req.userRole = role;
+  next();
+};
+
+// Limitador simples em memória (por chave), usado em fluxos sensíveis como recuperação de senha.
+const rateBuckets = new Map<string, number[]>();
+const isRateLimited = (key: string, max: number, windowMs: number) => {
+  const now = Date.now();
+  const hits = (rateBuckets.get(key) || []).filter((t) => now - t < windowMs);
+  if (hits.length >= max) {
+    rateBuckets.set(key, hits);
+    return true;
+  }
+  hits.push(now);
+  rateBuckets.set(key, hits);
+  return false;
+};
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, hits] of rateBuckets) {
+    if (!hits.some((t) => now - t < 60 * 60 * 1000)) rateBuckets.delete(key);
+  }
+}, 10 * 60 * 1000).unref();
+
 // Simple file-based debug logger for email flows (helps capture logs when
 // server output isn't visible in the terminal session)
 const DEBUG_LOG_DIR = path.join(process.cwd(), 'tmp');
@@ -169,7 +213,7 @@ const monitorEvent = async (type: string, details: any) => {
   }
 };
 
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '1mb' }));
 
 // Some reverse proxies may forward duplicated slashes (e.g. //api/...)
 // which prevents Express routes from matching. Normalize the URL path first.
@@ -217,8 +261,7 @@ app.use((req: any, _res: any, next: any) => {
 const DOCUMENT_MAX_BYTES = 2 * 1024 * 1024;
 const documentStaffRoles = new Set(['admin', 'attendant', 'dentist']);
 
-const getDocumentRequesterRole = async (uid: string, email?: string): Promise<string | null> => {
-  if (email === 'admin@odonto.com') return 'admin';
+const getDocumentRequesterRole = async (uid: string, _email?: string): Promise<string | null> => {
   const user = await db.collection('users').doc(uid).get();
   return user.exists ? String(user.data()?.role || '') : null;
 };
@@ -564,13 +607,46 @@ const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_REDIRECT_URI
 );
 
+// O `state` do OAuth é assinado (HMAC) para impedir que alguém vincule a própria conta Google
+// ao cadastro de outro usuário. Expira em 10 minutos.
+const OAUTH_STATE_SECRET = process.env.OAUTH_STATE_SECRET || process.env.GOOGLE_CLIENT_SECRET || randomUUID();
+const signOAuthState = (payload: { id: string; role: string }) => {
+  const body = Buffer.from(JSON.stringify({ ...payload, exp: Date.now() + 10 * 60 * 1000 })).toString('base64url');
+  const sig = createHmac('sha256', OAUTH_STATE_SECRET).update(body).digest('base64url');
+  return `${body}.${sig}`;
+};
+const verifyOAuthState = (state: string): { id?: string; role?: string } | null => {
+  const [body, sig] = String(state || '').split('.');
+  if (!body || !sig) return null;
+  const expected = createHmac('sha256', OAUTH_STATE_SECRET).update(body).digest('base64url');
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (!parsed?.exp || parsed.exp < Date.now()) return null;
+    return { id: parsed.id, role: parsed.role };
+  } catch {
+    return null;
+  }
+};
+
 // Google Auth URL (supports dentist or patient by passing userId & role)
-app.get("/api/auth/google/url", (req, res) => {
-  const userId = (req.query.userId || req.query.dentistId) as string;
-  const role = (req.query.role || (req.query.dentistId ? 'dentist' : 'patient')) as string;
+// Só o próprio usuário (ou um admin) pode iniciar a vinculação para um userId.
+app.get("/api/auth/google/url", requireAuth, async (req: any, res: any) => {
+  const userId = String(req.query.userId || req.query.dentistId || '').trim();
+  const role = String(req.query.role || (req.query.dentistId ? 'dentist' : 'patient'));
   if (!userId) return res.status(400).json({ error: "userId is required" });
 
-  const state = JSON.stringify({ id: userId, role });
+  const requesterUid = String(req.firebaseUser?.uid || '');
+  if (userId !== requesterUid) {
+    const requesterRole = await getRoleForFirebaseUid(requesterUid);
+    if (requesterRole !== 'admin') {
+      return res.status(403).json({ error: 'Sem permissão para vincular o Google Agenda de outro usuário.' });
+    }
+  }
+
+  const state = signOAuthState({ id: userId, role: role === 'patient' ? 'patient' : 'dentist' });
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
     scope: ["https://www.googleapis.com/auth/calendar.events"],
@@ -584,14 +660,9 @@ app.get("/api/auth/google/url", (req, res) => {
 // Google Auth Callback
 app.get("/auth/google/callback", async (req, res) => {
   const { code, state } = req.query;
-  let parsedState: { id?: string; role?: string } = {};
-  if (typeof state === 'string') {
-    try {
-      parsedState = JSON.parse(state);
-    } catch (e) {
-      // backward-compat: state may be a plain dentistId string
-      parsedState = { id: state as string, role: 'dentist' };
-    }
+  const parsedState = typeof state === 'string' ? verifyOAuthState(state) : null;
+  if (!parsedState) {
+    return res.status(400).send('Link de autorização inválido ou expirado. Tente conectar novamente.');
   }
   const id = parsedState.id;
   const role = parsedState.role || 'dentist';
@@ -728,7 +799,7 @@ const createGoogleEventForDentist = async (dentistId: string, eventBody: any) =>
 };
 
 // Endpoint to insert a test event for a dentist (useful for verifying integration)
-app.post('/api/google/insert-test-event', requireAuth, async (req: any, res: any) => {
+app.post('/api/google/insert-test-event', requireAuth, requireRole('admin'), async (req: any, res: any) => {
   const dentistId = req.body?.dentistId;
   if (!dentistId) return res.status(400).json({ error: 'dentistId is required' });
   const start = req.body?.start || new Date().toISOString();
@@ -749,7 +820,7 @@ app.post('/api/google/insert-test-event', requireAuth, async (req: any, res: any
   }
 });
 
-app.put("/api/users/:id", requireAuth, (req: any, res: any) => {
+app.put("/api/users/:id", requireAuth, requireRole('admin'), (req: any, res: any) => {
   const { id } = req.params;
   const updatedUser = req.body;
   const data = getData();
@@ -1042,8 +1113,6 @@ app.post('/api/admin/auth/create-user', requireAuth, async (req: any, res: any) 
 
 app.post('/api/admin/users/create', requireAuth, async (req: any, res: any) => {
   const requesterUid = String(req.firebaseUser?.uid || '').trim();
-  const requesterEmail = String(req.firebaseUser?.email || '').trim().toLowerCase();
-  const bootstrapAdminEmail = String(process.env.BOOTSTRAP_ADMIN_EMAIL || 'admin@odonto.com').trim().toLowerCase();
 
   const name = String(req.body?.name || '').trim();
   const email = String(req.body?.email || '').trim().toLowerCase();
@@ -1073,7 +1142,7 @@ app.post('/api/admin/users/create', requireAuth, async (req: any, res: any) => {
 
   try {
     const requesterRole = await getRoleForFirebaseUid(requesterUid);
-    const canManageUsers = requesterRole === 'admin' || requesterRole === 'attendant' || (!!bootstrapAdminEmail && requesterEmail === bootstrapAdminEmail);
+    const canManageUsers = requesterRole === 'admin' || requesterRole === 'attendant';
     if (!canManageUsers) {
       return res.status(403).json({ error: 'Sem permissão para criar usuários.' });
     }
@@ -1161,7 +1230,7 @@ app.post('/api/admin/users/create', requireAuth, async (req: any, res: any) => {
 });
 
 // API Routes
-app.get("/api/data", (req, res) => {
+app.get("/api/data", requireAuth, requireRole('admin'), (req: any, res: any) => {
   res.json(getData());
 });
 
@@ -1193,6 +1262,10 @@ app.post('/api/forgot-password', async (req, res) => {
 
   if (!normalizedEmail || !normalizedCpf) {
     return res.status(400).json({ error: 'email e cpf são obrigatórios' });
+  }
+
+  if (isRateLimited(`forgot:${normalizedEmail}`, 5, 60 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Muitas solicitações de recuperação para este e-mail. Tente novamente em 1 hora.' });
   }
 
   try {
@@ -1281,6 +1354,10 @@ app.post('/api/reset-password/complete', async (req, res) => {
     return res.status(400).json({ error: 'uid, token e newPassword são obrigatórios' });
   }
 
+  if (isRateLimited(`reset:${uid}`, 10, 15 * 60 * 1000)) {
+    return res.status(429).json({ error: 'Muitas tentativas. Aguarde alguns minutos e tente novamente.' });
+  }
+
   if (newPassword.length < 6) {
     return res.status(400).json({ error: 'A senha deve ter pelo menos 6 caracteres.' });
   }
@@ -1365,7 +1442,7 @@ app.post('/api/reset-password/complete', async (req, res) => {
 });
 
 // Sincroniza troca de e-mail com o Firebase Auth (evita desalinhamento com o Firestore que gera auth/invalid-credential no login).
-app.post('/api/update-user-email', async (req, res) => {
+app.post('/api/update-user-email', requireAuth, requireRole('admin'), async (req: any, res: any) => {
   const uid = String(req.body?.uid || '').trim();
   const newEmail = String(req.body?.newEmail || '').trim().toLowerCase();
 
@@ -1438,7 +1515,7 @@ app.post('/api/update-user-email', async (req, res) => {
 
 // Permite que um admin defina diretamente a senha de um usuário (Atendente, Dentista, Paciente etc.),
 // sincronizando Firebase Auth e Firestore no mesmo padrão do fluxo de reset de senha.
-app.post('/api/admin/set-password', async (req, res) => {
+app.post('/api/admin/set-password', requireAuth, requireRole('admin'), async (req: any, res: any) => {
   const uid = String(req.body?.uid || '').trim();
   const newPassword = String(req.body?.newPassword || '');
 
@@ -1513,7 +1590,7 @@ app.post('/api/admin/set-password', async (req, res) => {
 });
 
 // Web-friendly endpoint to trigger a test email (useful in production admin panel)
-app.post('/api/send-test-email', async (req, res) => {
+app.post('/api/send-test-email', requireAuth, requireRole('admin'), async (req: any, res: any) => {
   const to = req.body?.to || process.env.EMAIL_USER;
   const subject = req.body?.subject || 'Teste de envio - OdontoClinic';
   const text = req.body?.text || `Teste de envio em ${new Date().toLocaleString()}`;
@@ -1543,7 +1620,7 @@ app.get("/api/check-email-config", (req, res) => {
 });
 
 // Google connection status for a given user (dentist or patient)
-app.get('/api/google/status', async (req, res) => {
+app.get('/api/google/status', requireAuth, async (req: any, res: any) => {
   const userId = String(req.query.userId || req.query.id || '');
   const role = String(req.query.role || 'dentist');
   if (!userId) return res.status(400).json({ error: 'userId is required' });
@@ -1658,10 +1735,10 @@ app.get("/api/cbmpb/:identifier", async (req, res) => {
 });
 
 // Admin endpoint: fetch recent monitoring events (requires auth)
-app.get('/api/monitor/recent', requireAuth, async (req, res) => {
+app.get('/api/monitor/recent', requireAuth, requireRole('admin'), async (req: any, res: any) => {
   try {
     const type = req.query.type ? String(req.query.type) : null;
-    const limit = Number(req.query.limit || 50);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
 
     if (!db) {
       // Fallback: return last lines of debug log file
@@ -1712,7 +1789,7 @@ app.post('/api/sync-appointment', async (req, res) => {
   }
 });
 
-app.post("/api/data", async (req, res) => {
+app.post("/api/data", requireAuth, requireRole('admin'), async (req: any, res: any) => {
   const oldData = getData();
   const newData = req.body;
   
@@ -1745,7 +1822,7 @@ app.post("/api/data", async (req, res) => {
 });
 
 // Endpoint auxiliar: preencher e-mails ausentes de dependentes com o e-mail do titular
-app.post('/api/fix-dependents-emails', (req, res) => {
+app.post('/api/fix-dependents-emails', requireAuth, requireRole('admin'), (req: any, res: any) => {
   try {
     const data = getData();
     let updated = 0;
@@ -1913,6 +1990,10 @@ const resolveMailHeaders = () => {
 };
 
 const sendEmail = async (to: string, subject: string, text?: string, html?: string) => {
+  if (IS_EMULATOR) {
+    console.log(`[MODO TESTE] E-mail NÃO enviado -> para: ${to} | assunto: ${subject}\n${text || ''}`);
+    return { messageId: `emulator-${Date.now()}`, accepted: [to], rejected: [] } as any;
+  }
   // Ensure at least one recipient and some configuration exists
   if (!to) {
     throw new Error("No recipient specified");
@@ -2074,6 +2155,10 @@ const sendEmail = async (to: string, subject: string, text?: string, html?: stri
 
 // Support sending raw MIME messages (multipart/related with inline image)
 const sendRawEmail = async (to: string, subject: string, text?: string, html?: string) => {
+  if (IS_EMULATOR) {
+    console.log(`[MODO TESTE] E-mail NÃO enviado -> para: ${to} | assunto: ${subject}\n${text || ''}`);
+    return { messageId: `emulator-${Date.now()}`, accepted: [to], rejected: [] } as any;
+  }
   if (!to) throw new Error('No recipient specified');
   const { fromAddress, replyTo, provider } = resolveMailHeaders();
 
@@ -2276,7 +2361,7 @@ cron.schedule("0 * * * *", async () => {
 });
 
 // Gemini AI endpoint - a chave fica exclusivamente no servidor
-app.post("/api/ai/generate", async (req, res) => {
+app.post("/api/ai/generate", requireAuth, requireRole('admin', 'attendant', 'dentist'), async (req: any, res: any) => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return res.status(500).json({ error: "GEMINI_API_KEY não configurada no servidor" });

@@ -22,37 +22,27 @@ service cloud.firestore {
              : null;
     }
 
-    // Conta bootstrap para recuperação operacional quando users/{authUid}
-    // ainda não foi criado corretamente durante migração.
-    function isBootstrapAdmin() {
-      return isSignedIn() && request.auth.token.email == 'admin@odonto.com';
-    }
-
     function isStaff() {
       let role = getUserRole();
-      return role == 'dentist' || role == 'attendant' || role == 'admin' || isBootstrapAdmin();
+      return role == 'dentist' || role == 'attendant' || role == 'admin';
     }
 
     function isAdmin() {
       let role = getUserRole();
-      return role == 'attendant' || role == 'admin' || isBootstrapAdmin();
+      return role == 'attendant' || role == 'admin';
     }
 
     function hasUsersPermission() {
-      return isSignedIn() && (
-        isBootstrapAdmin()
-        || (
-          exists(/databases/$(database)/documents/users/$(request.auth.uid))
-          && (
-            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
-            || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'attendant'
-            || (
-              get(/databases/$(database)/documents/users/$(request.auth.uid)).data.permissions is list
-              && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.permissions.hasAny(['users'])
-            )
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && (
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+          || get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'attendant'
+          || (
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.permissions is list
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.permissions.hasAny(['users'])
           )
-        )
-      );
+        );
     }
 
     function isNotificationTypeAllowed(type) {
