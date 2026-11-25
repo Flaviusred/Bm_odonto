@@ -1280,8 +1280,54 @@ app.post("/api/send-email", requireAuth, async (req: any, res: any) => {
   }
 });
 
+// Endereços (origins) do frontend em que o sistema confia, para montar links enviados por e-mail.
+// Vêm de APP_ORIGIN, SITE_URL e CORS_ORIGINS; em desenvolvimento/modo teste, inclui o localhost.
+const getTrustedAppOrigins = (): string[] => {
+  const raw = [
+    process.env.APP_ORIGIN,
+    process.env.SITE_URL,
+    ...String(process.env.CORS_ORIGINS || '').split(','),
+  ];
+  if (IS_EMULATOR || process.env.NODE_ENV !== 'production') raw.push(`http://localhost:${PORT}`);
+  const origins = new Set<string>();
+  for (const value of raw) {
+    try {
+      if (value && value.trim()) origins.add(new URL(value.trim()).origin);
+    } catch { /* ignora valores inválidos */ }
+  }
+  return Array.from(origins);
+};
+
+// Devolve a URL base do app para links de e-mail: a enviada pelo navegador, se for de um
+// endereço autorizado (preserva subcaminhos como /bravoOdonto/); senão APP_ORIGIN/SITE_URL +
+// APP_BASE_PATH. Retorna '' se nada estiver configurado.
+const resolveTrustedAppUrl = (requested?: unknown): string => {
+  const trusted = getTrustedAppOrigins();
+  if (requested) {
+    try {
+      const url = new URL(String(requested).trim());
+      if (trusted.includes(url.origin) && (url.protocol === 'https:' || url.hostname === 'localhost')) {
+        return `${url.origin}${url.pathname || '/'}`;
+      }
+    } catch { /* ignora */ }
+  }
+  const configured = String(process.env.APP_ORIGIN || process.env.SITE_URL || '').trim();
+  if (!configured) return IS_EMULATOR || process.env.NODE_ENV !== 'production' ? `http://localhost:${PORT}/` : '';
+  try {
+    const base = new URL(configured);
+    const basePath = String(process.env.APP_BASE_PATH || base.pathname || '/').trim();
+    return `${base.origin}${basePath.startsWith('/') ? basePath : `/${basePath}`}`;
+  } catch {
+    return '';
+  }
+};
+
+const escapeHtml = (value: string) => value
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
 app.post('/api/forgot-password', async (req, res) => {
-  const { email, cpf, name, resetLink, origin } = req.body || {};
+  const { email, cpf, name, resetLink } = req.body || {};
   const normalizedEmail = String(email || '').trim().toLowerCase();
   const normalizedCpf = normalizeCpf(cpf);
 
@@ -1306,36 +1352,14 @@ app.post('/api/forgot-password', async (req, res) => {
     const token = randomUUID();
     const expiresAt = Date.now() + 60 * 60 * 1000;
 
-    // Resolve a front-end base URL preserving deployment subpaths (e.g. /bravoOdonto/).
-    const appBasePath = String(process.env.APP_BASE_PATH || '/').trim();
-    const normalizedAppBasePath = appBasePath.startsWith('/') ? appBasePath : `/${appBasePath}`;
-    const bodyOrigin = String(origin || '').trim();
-    const refererHeader = String(req.headers?.referer || '').trim();
-    const fallbackOrigin = String(process.env.APP_ORIGIN || `http://localhost:${PORT}`).trim();
-
-    const baseUrl = (() => {
-      if (resetLink) return String(resetLink).trim();
-
-      const normalizeBase = (raw: string) => {
-        if (!raw) return '';
-        try {
-          const parsed = new URL(raw);
-          const path = (parsed.pathname || '/').replace(/\/+$/, '/');
-          const hasSubPath = path !== '/';
-          const resolvedPath = hasSubPath ? path : normalizedAppBasePath.replace(/\/+$/, '/') || '/';
-          return `${parsed.origin}${resolvedPath}`;
-        } catch {
-          return '';
-        }
-      };
-
-      return (
-        normalizeBase(refererHeader)
-        || normalizeBase(bodyOrigin)
-        || normalizeBase(fallbackOrigin)
-        || `http://localhost:${PORT}/`
-      );
-    })();
+    // O link do e-mail só pode apontar para um endereço autorizado do próprio sistema.
+    // Antes, ele era montado com o endereço informado pelo navegador (resetLink/origin/Referer),
+    // o que permitia enviar à vítima um e-mail legítimo com o token apontando para outro site.
+    const baseUrl = resolveTrustedAppUrl(resetLink);
+    if (!baseUrl) {
+      console.error('/api/forgot-password: nenhum endereço autorizado configurado. Defina APP_ORIGIN (ou SITE_URL) no servidor.');
+      return res.status(503).json({ error: 'Recuperação de senha indisponível no momento. Contate o suporte.' });
+    }
 
     const separator = baseUrl.includes('?') ? '&' : '?';
     const link = `${baseUrl.replace(/\/+$/, '')}${separator}resetToken=${encodeURIComponent(token)}&uid=${encodeURIComponent(targetUser.id)}`;
@@ -1352,7 +1376,7 @@ app.post('/api/forgot-password', async (req, res) => {
     const displayName = String(targetUser.name || name || '');
     const text = `Olá ${displayName},\n\nRecebemos uma solicitação para redefinir sua senha. Acesse o link abaixo:\n\n${link}\n\nO link expira em 1 hora. Se não solicitou, ignore este e-mail.`;
     const htmlBody = `
-      <p>Olá <strong>${displayName}</strong>,</p>
+      <p>Olá <strong>${escapeHtml(displayName)}</strong>,</p>
       <p>Você solicitou a redefinição de senha do seu acesso ao <strong>Bravo Odonto</strong>.</p>
       <p>Clique no botão abaixo para criar uma nova senha. O link expira em <strong>1 hora</strong>.</p>
       <p style="text-align:center;margin:24px 0">
