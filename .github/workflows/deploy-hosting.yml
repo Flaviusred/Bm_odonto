@@ -13,6 +13,7 @@ on:
       - "vite.config.ts"
       - "firebase.json"
       - "firestore.rules"
+      - "storage.rules"
   workflow_dispatch:
 
 jobs:
@@ -46,3 +47,8 @@ jobs:
         env:
           FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
         run: node scripts/deploy-firestore-rules.cjs
+
+      # Por último: se falhar (ex.: permissão do Storage para ler o Firestore nas regras),
+      # o site e as regras do Firestore já foram publicados.
+      - name: Deploy Storage Rules
+        run: firebase deploy --only storage --project odonto-490913 --non-interactive --token "${{ secrets.FIREBASE_TOKEN }}"
