@@ -15,6 +15,7 @@
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "notifications:check-overdue": "tsx scripts/check-overdue-appointments.ts",
+    "notifications:simular": "tsx scripts/check-overdue-appointments.ts --simular",
     "cleanup:empty-users:dry": "tsx scripts/cleanup-empty-user-docs.ts",
     "cleanup:empty-users:apply": "tsx scripts/cleanup-empty-user-docs.ts --apply",
     "senhas:simular": "tsx scripts/remove-plaintext-passwords.ts",
