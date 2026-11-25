@@ -170,18 +170,21 @@ async function run(): Promise<void> {
 
   let batch = db.batch();
   let batchCount = 0;
+  let createdCount = 0;
+  let skippedCount = 0;
   const batchLimit = 500;
 
   for (const appointmentDoc of pendingNotifications) {
     const appointment = appointmentDoc.data() as AppointmentRecord;
     const dentistAuthUid = appointment.dentistAuthUid;
     if (!dentistAuthUid || !appointment.time) {
+      skippedCount += 1;
       continue;
     }
 
     const patientName = appointment.patientId ? (patientMap.get(appointment.patientId) || 'Paciente') : 'Paciente';
+    createdCount += 1;
     if (DRY_RUN) {
-      batchCount += 1;
       continue;
     }
     const notificationRef = db.collection('notifications').doc();
@@ -196,7 +199,7 @@ async function run(): Promise<void> {
   }
 
   if (DRY_RUN) {
-    console.log(`[SIMULAÇÃO] ${batchCount} notificação(ões) seriam criadas (de ${overdueAppointments.length} agendamento(s) vencido(s) sem conclusão). Nada foi gravado.`);
+    console.log(`[SIMULAÇÃO] ${createdCount} notificação(ões) seriam criadas (de ${overdueAppointments.length} agendamento(s) vencido(s) sem conclusão; ${skippedCount} sem dentista com login vinculado). Nada foi gravado.`);
     return;
   }
 
@@ -204,7 +207,7 @@ async function run(): Promise<void> {
     await batch.commit();
   }
 
-  console.log(`${pendingNotifications.length} notificação(ões) de agendamento pendente criada(s).`);
+  console.log(`${createdCount} notificação(ões) de agendamento pendente criada(s)${skippedCount ? `; ${skippedCount} agendamento(s) vencido(s) sem dentista com login vinculado (sem aviso)` : ''}.`);
 }
 
 run().catch((error) => {
