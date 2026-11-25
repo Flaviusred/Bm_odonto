@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { User, Patient, Appointment, Dentist, Treatment } from '../types';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './Card';
 import { Button } from './Button';
@@ -53,6 +53,17 @@ export function PatientPortal({
     address: patient.address,
   });
 
+  // O portal pode abrir antes de o cadastro do paciente terminar de carregar; atualiza o
+  // formulário quando os dados chegam (senão campos obrigatórios ficam vazios e não salvam).
+  useEffect(() => {
+    setFormData({
+      name: patient.name || '',
+      email: patient.email || '',
+      phone: patient.phone || '',
+      address: patient.address || '',
+    });
+  }, [patient.id, patient.name, patient.email, patient.phone, patient.address]);
+
   const [googleConnecting, setGoogleConnecting] = useState(false);
   const [appointmentDetail, setAppointmentDetail] = useState<Appointment | null>(null);
   
@@ -83,7 +94,7 @@ export function PatientPortal({
                 {patient.name.charAt(0)}
               </div>
               <h2 className="text-xl font-bold text-zinc-900">{patient.name}</h2>
-              <p className="text-sm text-zinc-500 mb-6">Paciente desde {new Date(patient.createdAt).toLocaleDateString('pt-BR')}</p>
+              <p className="text-sm text-zinc-500 mb-6">Paciente desde {patient.createdAt ? new Date(patient.createdAt).toLocaleDateString('pt-BR') : '—'}</p>
               <div className="w-full space-y-4 text-left">
                 <div className="flex items-center gap-3 text-sm text-zinc-600">
                   <CreditCard className="h-4 w-4 text-zinc-400" />
@@ -91,7 +102,7 @@ export function PatientPortal({
                 </div>
                 <div className="flex items-center gap-3 text-sm text-zinc-600">
                   <Calendar className="h-4 w-4 text-zinc-400" />
-                  <span>Nascimento: {parseDate(patient.birthDate).toLocaleDateString('pt-BR')}</span>
+                  <span>Nascimento: {patient.birthDate ? parseDate(patient.birthDate).toLocaleDateString('pt-BR') : 'Não informado'}</span>
                 </div>
                 {patient.anamnesis && (
                   <div className="pt-4 border-t border-zinc-100">

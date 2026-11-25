@@ -45,6 +45,32 @@ service cloud.firestore {
         );
     }
 
+    function isRealAdmin() {
+      return getUserRole() == 'admin';
+    }
+
+    function grantsUsersPermission(data) {
+      return data.get('permissions', []) is list && data.get('permissions', []).hasAny(['users']);
+    }
+
+    // Perfil que o próprio usuário pode criar para si (cadastro ou migração do login antigo):
+    // paciente, ou dentista que já tem cadastro em `dentists` com o mesmo e-mail do login.
+    // Ninguém consegue se criar como admin ou atendente.
+    function isAllowedSelfProfile(userId) {
+      let data = request.resource.data;
+      let dentistId = data.get('legacyId', userId);
+      return (request.auth.uid == userId || data.get('authUid', '') == request.auth.uid)
+        && !grantsUsersPermission(data)
+        && (
+          data.role == 'patient'
+          || (
+            data.role == 'dentist'
+            && exists(/databases/$(database)/documents/dentists/$(dentistId))
+            && get(/databases/$(database)/documents/dentists/$(dentistId)).data.email == request.auth.token.email
+          )
+        );
+    }
+
     function isNotificationTypeAllowed(type) {
       return type == 'success' || type == 'info' || type == 'error' || type == 'warning';
     }
@@ -86,15 +112,18 @@ service cloud.firestore {
 
     // --- Users ---
     match /users/{userId} {
-      // Criação: o próprio usuário (bootstrap/migração) ou quem tem permissão de gestão de usuários.
+      // Criação: admin; gestor de usuários (sem criar admin nem conceder a permissão `users`);
+      // ou o próprio usuário criando o seu perfil de paciente/dentista (ver isAllowedSelfProfile).
       allow create: if isSignedIn() && (
-        request.auth.uid == userId
-        || request.auth.uid == request.resource.data.authUid
+        isRealAdmin()
         || (
           hasUsersPermission()
+          && request.resource.data.role in ['patient', 'dentist', 'attendant']
+          && !grantsUsersPermission(request.resource.data)
           && request.resource.data.cpf is string
           && request.resource.data.cpf.matches('^[0-9]{11}$')
         )
+        || isAllowedSelfProfile(userId)
       );
 
       // Leitura de documento único: o próprio usuário, por authUid, por email, ou staff
@@ -105,19 +134,40 @@ service cloud.firestore {
         || isStaff()
       );
 
-      // Listagem (queries): qualquer usuário autenticado pode listar usuários.
-      // Necessário para login de migração (busca por email antes do documento {authUid} existir).
-      allow list: if isSignedIn();
-
-      // Atualização: o próprio usuário (por id ou authUid) ou staff pode atualizar
-      allow update: if isSignedIn() && (
-        request.auth.uid == userId
+      // Listagem: staff vê todos; os demais só os próprios documentos (consulta por authUid ou
+      // pelo próprio e-mail, usada no login).
+      allow list: if isSignedIn() && (
+        isStaff()
         || resource.data.authUid == request.auth.uid
-        || hasUsersPermission()
+        || resource.data.email == request.auth.token.email
       );
 
-      // Exclusão permitida para gestão de usuários
-      allow delete: if isSignedIn() && hasUsersPermission();
+      // Atualização:
+      // - admin: qualquer campo;
+      // - gestor de usuários: não mexe em admins nem em papel/permissões;
+      // - o próprio usuário: não altera papel nem permissões, e só pode vincular o próprio authUid.
+      allow update: if isSignedIn() && (
+        isRealAdmin()
+        || (
+          hasUsersPermission()
+          && resource.data.role != 'admin'
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'permissions'])
+        )
+        || (
+          (request.auth.uid == userId || resource.data.authUid == request.auth.uid)
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'permissions'])
+          && (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['authUid'])
+            || request.resource.data.authUid == request.auth.uid
+          )
+        )
+      );
+
+      // Exclusão: admin; gestor de usuários apenas de pacientes.
+      allow delete: if isSignedIn() && (
+        isRealAdmin()
+        || (hasUsersPermission() && resource.data.role == 'patient')
+      );
     }
 
     // --- Patients (prontuários) ---
@@ -128,8 +178,22 @@ service cloud.firestore {
       // Leitura: staff ou o próprio paciente (quando o documento contém `authUid` ou email)
       allow read: if isSignedIn() && (isStaff() || request.auth.uid == resource.data.authUid || request.auth.token.email == resource.data.email);
 
-      // Atualização: staff ou paciente autenticado (via `authUid`)
-      allow update: if isSignedIn() && (isStaff() || request.auth.uid == resource.data.authUid);
+      // Atualização: staff; o próprio paciente só altera os dados de contato
+      // (e pode apagar uma senha antiga armazenada, nunca gravar uma).
+      allow update: if isSignedIn() && (
+        isStaff()
+        || (
+          request.auth.uid == resource.data.authUid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'name', 'email', 'phone', 'address', 'cep', 'street', 'number',
+            'neighborhood', 'city', 'state', 'photoURL', 'password'
+          ])
+          && (
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny(['password'])
+            || !('password' in request.resource.data)
+          )
+        )
+      );
 
       allow delete: if isSignedIn() && isAdmin();
     }
@@ -151,21 +215,29 @@ service cloud.firestore {
     // Regras conservadoras: staff tem controle; pacientes autenticados podem criar/ler/atualizar seus próprios agendamentos
     // Para isso o documento de agendamento deve conter `patientAuthUid` ou `patientEmail` (recomendado adicionar `patientAuthUid`).
     match /appointments/{aptId} {
-      allow create: if isSignedIn()
-                    && (isStaff() || request.auth.uid == request.resource.data.patientAuthUid || request.auth.token.email == request.resource.data.patientEmail);
+      // Criação: apenas a equipe (o portal do paciente não cria agendamentos).
+      allow create: if isSignedIn() && isStaff();
 
       allow read: if isSignedIn()
                   && (isStaff() || request.auth.uid == resource.data.patientAuthUid || request.auth.token.email == resource.data.patientEmail);
 
-      allow update: if isSignedIn()
-                    && (isStaff() || request.auth.uid == resource.data.patientAuthUid || request.auth.token.email == resource.data.patientEmail);
+      // Atualização: equipe; o paciente só confirma ou cancela o próprio agendamento.
+      allow update: if isSignedIn() && (
+        isStaff()
+        || (
+          (request.auth.uid == resource.data.patientAuthUid || request.auth.token.email == resource.data.patientEmail)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+          && request.resource.data.status in ['confirmed', 'cancelled', 'Confirmado', 'Cancelado']
+        )
+      );
 
       allow delete: if isSignedIn() && isStaff();
     }
 
     // --- Treatments ---
     match /treatments/{tId} {
-      allow create, read, update: if isSignedIn() && (isStaff() || request.auth.uid == resource.data.patientAuthUid);
+      allow read: if isSignedIn() && (isStaff() || request.auth.uid == resource.data.patientAuthUid);
+      allow create, update: if isSignedIn() && isStaff();
       allow delete: if isSignedIn() && isStaff();
     }
 

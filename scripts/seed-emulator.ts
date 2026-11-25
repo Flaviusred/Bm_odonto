@@ -85,7 +85,7 @@ const main = async () => {
   await db.collection('appointments').doc('teste-agendamento').set({
     id: 'teste-agendamento', patientId: 'teste-paciente', dentistId: 'teste-dentista',
     patientAuthUid: 'teste-paciente', dentistAuthUid: 'teste-dentista', patientEmail: 'paciente@teste.local',
-    date: tomorrow, time: '09:00', status: 'Agendado', notes: 'Agendamento de teste', createdAt: now,
+    date: tomorrow, time: '09:00', status: 'scheduled', notes: 'Agendamento de teste', createdAt: now,
   }, { merge: true });
 
   console.log('\nDados de teste prontos no emulador. Logins (senha para todos: ' + PASSWORD + '):');
