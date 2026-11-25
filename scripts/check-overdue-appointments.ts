@@ -105,6 +105,9 @@ function buildNotificationPayload(userId: string, appointmentId: string, patient
   };
 }
 
+// --simular: só mostra quantos avisos seriam criados, sem gravar nada.
+const DRY_RUN = process.argv.includes('--simular') || process.argv.includes('--dry-run');
+
 async function run(): Promise<void> {
   const now = new Date();
   const appointmentsSnap = await db.collection('appointments').get();
@@ -177,6 +180,10 @@ async function run(): Promise<void> {
     }
 
     const patientName = appointment.patientId ? (patientMap.get(appointment.patientId) || 'Paciente') : 'Paciente';
+    if (DRY_RUN) {
+      batchCount += 1;
+      continue;
+    }
     const notificationRef = db.collection('notifications').doc();
     batch.set(notificationRef, buildNotificationPayload(dentistAuthUid, appointmentDoc.id, patientName, appointment.time));
     batchCount += 1;
@@ -186,6 +193,11 @@ async function run(): Promise<void> {
       batch = db.batch();
       batchCount = 0;
     }
+  }
+
+  if (DRY_RUN) {
+    console.log(`[SIMULAÇÃO] ${batchCount} notificação(ões) seriam criadas (de ${overdueAppointments.length} agendamento(s) vencido(s) sem conclusão). Nada foi gravado.`);
+    return;
   }
 
   if (batchCount > 0) {
