@@ -6,12 +6,12 @@
  *
  * É idempotente: pode rodar várias vezes sem duplicar dados.
  */
-import adminModule from 'firebase-admin';
+import { initializeApp } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import fs from 'fs';
 import path from 'path';
 
-const admin: any = (adminModule as any)?.default || adminModule;
 
 const PROJECT_ID = 'demo-bm-odonto';
 const PASSWORD = 'teste123';
@@ -28,8 +28,8 @@ delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 const clientConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'firebase-applet-config.json'), 'utf-8'));
 const databaseId = String(clientConfig.firestoreDatabaseId || '').trim();
 
-const app = admin.initializeApp({ projectId: PROJECT_ID }, 'seed-emulator');
-const auth = app.auth();
+const app = initializeApp({ projectId: PROJECT_ID }, 'seed-emulator');
+const auth = getAuth(app);
 const db = databaseId && databaseId !== '(default)' ? getFirestore(app, databaseId) : getFirestore(app);
 
 const now = new Date().toISOString();

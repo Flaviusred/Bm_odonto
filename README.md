@@ -102,7 +102,7 @@ Na agenda e no portal do dentista, agendamentos em aberto podem ser marcados com
 
 ## Executar localmente
 
-**Pré-requisitos:** Node.js 20+
+**Pré-requisitos:** Node.js 24.12+ (exigido pelo `firebase` 13 e pelo `firebase-admin` 14; vale também para o servidor de produção e o GitHub Actions)
 
 ```bash
 # Instalar dependências

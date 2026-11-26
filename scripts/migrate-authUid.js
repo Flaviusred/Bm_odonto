@@ -15,7 +15,17 @@ Observações:
 - Modo seguro (dry-run) apenas lista as alterações planejadas. Use `--apply` para executar as mudanças.
 */
 
-import admin from 'firebase-admin';
+import { initializeApp, cert, applicationDefault } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import { getFirestore } from 'firebase-admin/firestore';
+
+// firebase-admin 13+ removeu a API antiga; este objeto mantém a forma usada abaixo.
+const admin = {
+  initializeApp: (options) => initializeApp(options),
+  credential: { cert, applicationDefault },
+  firestore: () => getFirestore(),
+  auth: () => getAuth(),
+};
 import { createRequire } from 'module';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
