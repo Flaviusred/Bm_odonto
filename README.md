@@ -167,6 +167,15 @@ npm run senhas:aplicar
   (ou `FIREBASE_SERVICE_ACCOUNT` com o JSON) no `.env.local`.
 - Nunca imprime senhas.
 
+## Cabeçalhos de segurança (CSP)
+
+Em produção, o servidor envia cabeçalhos de segurança (helmet). A CSP (lista de origens que o
+navegador pode usar) começa em **modo observação**: nada é bloqueado, mas o navegador mostra no
+console (F12) avisos `Content Security Policy` sobre o que seria bloqueado.
+
+Depois de alguns dias sem esses avisos, ative o bloqueio adicionando ao `.env` do servidor
+`CSP_MODE=enforce` e reiniciando o serviço. Se algo parar de funcionar, remova a linha e reinicie.
+
 ## Variáveis de ambiente
 
 Crie um arquivo `.env` na raiz com as seguintes variáveis:
