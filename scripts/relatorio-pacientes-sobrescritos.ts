@@ -81,6 +81,12 @@ const main = async () => {
   }
 
   console.log(`\nHistórico analisado: ${logsSnap.size} registro(s) de pacientes, ${byPatient.size} ID(s).`);
+
+  // Exclusões registradas (para descartar/confirmar que pacientes foram apagados pelo botão Excluir).
+  const deletions = [...byPatient.values()].flat().filter((e) => e.action === 'Exclusão').sort((a, b) => b.when.localeCompare(a.when));
+  console.log(`\nExclusões de pacientes registradas: ${deletions.length}`);
+  deletions.slice(0, 50).forEach((d) => console.log(`    ${formatDate(d.when)}  excluído "${d.name}" por ${d.by || '?'}`));
+  if (deletions.length > 50) console.log(`    ... e mais ${deletions.length - 50}`);
   if (lost.length === 0) {
     console.log('Nenhum cadastro sobrescrito encontrado no histórico.\n');
     return;
