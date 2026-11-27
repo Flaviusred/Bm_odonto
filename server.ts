@@ -6,11 +6,26 @@ import cron from "node-cron";
 import nodemailer from "nodemailer";
 import { randomUUID, createHmac, timingSafeEqual } from "crypto";
 import dotenv from "dotenv";
-import adminModule from 'firebase-admin';
+import {
+  initializeApp as adminInitializeApp,
+  getApps as adminGetApps,
+  getApp as adminGetApp,
+  cert as adminCert,
+  applicationDefault as adminApplicationDefault,
+} from 'firebase-admin/app';
+import { getAuth as adminGetAuth } from 'firebase-admin/auth';
+import { getStorage as adminGetStorage } from 'firebase-admin/storage';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-// Some environments/packagers expose firebase-admin as a default export,
-// others as the module namespace. Normalize to `admin` variable.
-const admin: any = (adminModule as any)?.default || adminModule;
+// O firebase-admin 13+ removeu a API antiga (admin.auth(), admin.storage()...). Este objeto mantém
+// essa forma de chamada usada no restante do servidor, delegando para a API modular atual.
+const admin: any = {
+  get apps() { return adminGetApps(); },
+  app: () => adminGetApp(),
+  initializeApp: (options?: any) => adminInitializeApp(options),
+  credential: { cert: adminCert, applicationDefault: adminApplicationDefault },
+  auth: () => adminGetAuth(),
+  storage: () => adminGetStorage(),
+};
 import { google } from "googleapis";
 
 dotenv.config();
@@ -87,10 +102,10 @@ try {
         console.log(`Firestore admin conectado ao database: ${FIREBASE_DATABASE_ID}`);
       } catch (namedDbErr) {
         console.warn('getFirestore com named database falhou, tentando default:', namedDbErr);
-        db = adminApp.firestore ? adminApp.firestore() : null;
+        db = getFirestore(adminApp);
       }
     } else {
-      db = adminApp.firestore ? adminApp.firestore() : null;
+      db = getFirestore(adminApp);
     }
   } else if (admin && typeof admin.firestore === 'function') {
     db = admin.firestore();

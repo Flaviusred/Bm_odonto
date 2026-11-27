@@ -1,10 +1,10 @@
 import dotenv from 'dotenv';
-import adminModule from 'firebase-admin';
+import { initializeApp, getApps, cert, applicationDefault } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
 import fs from 'fs';
 import path from 'path';
 
 // Normaliza import do firebase-admin para ambientes CJS/ESM.
-const admin: any = (adminModule as any)?.default || adminModule;
 
 dotenv.config();
 
@@ -30,7 +30,7 @@ function resolveProjectId(): string | undefined {
 }
 
 function initAdmin() {
-  const apps = admin?.apps || [];
+  const apps = getApps();
   if (apps.length > 0) return;
 
   const projectId = resolveProjectId();
@@ -39,17 +39,17 @@ function initAdmin() {
   if (serviceAccountPath) {
     const raw = fs.readFileSync(path.resolve(serviceAccountPath), 'utf-8');
     const serviceAccount = JSON.parse(raw);
-    admin.initializeApp({ credential: admin.credential.cert(serviceAccount), projectId });
+    initializeApp({ credential: cert(serviceAccount), projectId });
     return;
   }
 
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
     const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-    admin.initializeApp({ credential: admin.credential.cert(serviceAccount), projectId });
+    initializeApp({ credential: cert(serviceAccount), projectId });
     return;
   }
 
-  admin.initializeApp({ credential: admin.credential.applicationDefault(), projectId });
+  initializeApp({ credential: applicationDefault(), projectId });
 }
 
 async function findEmptyDocs(db: FirebaseFirestore.Firestore, col: TargetCollection) {
@@ -76,7 +76,7 @@ async function main() {
   }
 
   initAdmin();
-  const db = admin.firestore() as FirebaseFirestore.Firestore;
+  const db = getFirestore();
 
   const plan: Array<{ col: TargetCollection; total: number; emptyDocIds: string[] }> = [];
 

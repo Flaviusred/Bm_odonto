@@ -18,12 +18,12 @@
  * ou FIREBASE_SERVICE_ACCOUNT com o JSON. No modo teste (emulador) não precisa.
  */
 import dotenv from 'dotenv';
-import adminModule from 'firebase-admin';
+import { initializeApp, cert, applicationDefault } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
 import { getFirestore, FieldValue } from 'firebase-admin/firestore';
 import fs from 'fs';
 import path from 'path';
 
-const admin: any = (adminModule as any)?.default || adminModule;
 
 dotenv.config();
 
@@ -37,21 +37,21 @@ const databaseId = String(clientConfig.firestoreDatabaseId || '').trim();
 const initAdmin = () => {
   if (IS_EMULATOR) {
     delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
-    return admin.initializeApp({ projectId: 'demo-bm-odonto' });
+    return initializeApp({ projectId: 'demo-bm-odonto' });
   }
   const projectId = process.env.FIREBASE_PROJECT_ID || clientConfig.projectId;
   if (process.env.FIREBASE_SERVICE_ACCOUNT_PATH) {
     const serviceAccount = JSON.parse(fs.readFileSync(path.resolve(process.env.FIREBASE_SERVICE_ACCOUNT_PATH), 'utf-8'));
-    return admin.initializeApp({ credential: admin.credential.cert(serviceAccount), projectId });
+    return initializeApp({ credential: cert(serviceAccount), projectId });
   }
   if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    return admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)), projectId });
+    return initializeApp({ credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)), projectId });
   }
-  return admin.initializeApp({ credential: admin.credential.applicationDefault(), projectId });
+  return initializeApp({ credential: applicationDefault(), projectId });
 };
 
 const app = initAdmin();
-const auth = app.auth();
+const auth = getAuth(app);
 const db = databaseId && databaseId !== '(default)' ? getFirestore(app, databaseId) : getFirestore(app);
 
 const authAccountExists = async (data: any, docId: string) => {
