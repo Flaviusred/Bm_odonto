@@ -1302,8 +1302,18 @@ export default function App() {
         }
 
         const effectiveId = (!data.id && authUid && !data.dependentOf) ? authUid : baseId;
-        // Proteção extra: nunca grava por cima de um cadastro existente.
-        if ((await getDoc(doc(db, 'patients', effectiveId))).exists()) {
+        // Proteção extra: nunca grava por cima de um cadastro existente. Consulta o servidor; se ele
+        // não responder (conexão instável / "client is offline"), usa a lista já carregada na tela,
+        // que é atualizada em tempo real, em vez de impedir o cadastro.
+        let alreadyExists = patients.some((p) => p.id === effectiveId);
+        if (!alreadyExists) {
+          try {
+            alreadyExists = (await getDoc(doc(db, 'patients', effectiveId))).exists();
+          } catch (checkErr) {
+            console.warn('Não foi possível confirmar no servidor se o cadastro já existe; usando a lista local.', checkErr);
+          }
+        }
+        if (alreadyExists) {
           throw new Error('Já existe um paciente com este identificador. Recarregue a página e confira a lista antes de cadastrar novamente.');
         }
         const newPatient: Patient = {
