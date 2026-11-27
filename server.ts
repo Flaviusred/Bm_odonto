@@ -1,4 +1,5 @@
 import express from "express";
+import helmet from "helmet";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import fs from "fs";
@@ -227,6 +228,59 @@ const monitorEvent = async (type: string, details: any) => {
     try { appendDebugLog(`monitorEvent failed: ${e instanceof Error ? e.message : String(e)}`); } catch (e2) {}
   }
 };
+
+// Cabeçalhos de segurança. A CSP vale só em produção (o Vite de desenvolvimento usa scripts
+// inline). Por padrão fica em modo de observação (Report-Only: o navegador só avisa no console o
+// que seria bloqueado); para bloquear de fato, defina CSP_MODE=enforce no .env.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const CSP_ENFORCE = String(process.env.CSP_MODE || '').toLowerCase() === 'enforce';
+const firebaseAuthDomain = String(firebaseClientConfig.authDomain || '').trim();
+const emulatorOrigins = IS_EMULATOR ? ['http://127.0.0.1:9099', 'http://127.0.0.1:8080', 'http://127.0.0.1:9199', 'ws://127.0.0.1:8080'] : [];
+app.disable('x-powered-by');
+app.use(helmet({
+  contentSecurityPolicy: IS_PRODUCTION ? {
+    useDefaults: false,
+    reportOnly: !CSP_ENFORCE,
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https://ui-avatars.com', 'https://*.googleusercontent.com', 'https://firebasestorage.googleapis.com'],
+      fontSrc: ["'self'", 'data:'],
+      connectSrc: ["'self'", 'https://*.googleapis.com', 'https://*.firebaseio.com', 'wss://*.firebaseio.com', 'https://*.firebaseapp.com', ...emulatorOrigins],
+      frameSrc: ["'self'", ...(firebaseAuthDomain ? [`https://${firebaseAuthDomain}`] : []), 'https://accounts.google.com'],
+      workerSrc: ["'self'", 'blob:'],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+      frameAncestors: ["'self'"],
+    },
+  } : false,
+  // Mantém o vínculo com a janela de conexão do Google Agenda (popup que avisa a página de origem).
+  crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
+  // Não bloqueia o uso de arquivos do servidor por outras origens autorizadas (ex.: Firebase Hosting).
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  strictTransportSecurity: { maxAge: 180 * 24 * 60 * 60, includeSubDomains: false },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+}));
+
+// Em produção, respostas de erro não levam detalhes técnicos internos ao navegador
+// (mensagens de exceção, respostas brutas de APIs externas); eles vão só para o log.
+app.use((req: any, res: any, next: any) => {
+  if (!IS_PRODUCTION) return next();
+  const originalJson = res.json.bind(res);
+  res.json = (body: any) => {
+    if (res.statusCode >= 400 && body && typeof body === 'object' && !Array.isArray(body)) {
+      const { details, body: rawBody, ...safe } = body;
+      if (details !== undefined || rawBody !== undefined) {
+        console.error(`[${req.method} ${req.path}] ${res.statusCode}:`, details ?? '', rawBody ? String(rawBody).slice(0, 500) : '');
+      }
+      return originalJson(safe);
+    }
+    return originalJson(body);
+  };
+  next();
+});
 
 app.use(express.json({ limit: '1mb' }));
 
@@ -1776,7 +1830,9 @@ app.get("/api/cbmpb/:identifier", requireAuth, requireRole('admin', 'attendant',
     }
 
     if (!response.ok) {
-        return res.status(response.status).json({ error: `API error: ${responseText}` });
+        // O corpo da resposta da API externa vai só para o log, não para o navegador.
+        console.error(`CBMPB respondeu ${response.status}: ${String(responseText || '').slice(0, 500)}`);
+        return res.status(response.status).json({ error: `A consulta ao CBMPB falhou (código ${response.status}). Tente novamente.` });
     }
     
     if (!responseText || responseText.trim() === "") {
