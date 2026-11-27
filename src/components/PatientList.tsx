@@ -10,6 +10,7 @@ import { isOpenAppointment } from '../lib/appointmentStatus';
 import { Patient, Appointment, Treatment, Dentist, PatientType, PatientDocument } from '../types';
 import { patientService } from '../services/patientService';
 import { cn, validateCPF, maskCPF, maskPhone, maskCEP } from '../lib/utils';
+import { getTitularName, indexPatients, matchesPatientSearch } from '../lib/patientSearch';
 import { formatDateDDMMYYYY, formatDateLocal, parseDate, parseDateTime } from '../lib/dateUtils';
 import { formatTreatmentProcedures } from '../constants';
 
@@ -243,16 +244,15 @@ function PatientListContent({
     password: '',
   });
 
+  const patientsById = indexPatients(patients);
   const filteredPatients = [...patients]
     .sort((a, b) => {
       const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
       const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
       return dateB - dateA;
     })
-    .filter(p => 
-      (p.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.cpf && p.cpf.includes(searchTerm))
-    );
+    // Nome (sem acentos) ou CPF; dependentes também aparecem quando a busca corresponde ao titular.
+    .filter(p => matchesPatientSearch(p, searchTerm, patientsById));
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
@@ -497,6 +497,9 @@ function PatientListContent({
               {patient.parentesco && (
                 <span className="text-[10px] text-zinc-400 uppercase font-bold">• {patient.parentesco}</span>
               )}
+              {patient.dependentOf && (
+                <span className="text-[10px] text-amber-600 uppercase font-bold">• Dependente de {getTitularName(patient, patientsById) || 'titular'}</span>
+              )}
               {patient.patientType === 'cbmpb' && !patient.parentesco && (
                 <span className="text-[10px] text-emerald-600 uppercase font-bold">• Titular CBMPB</span>
               )}
@@ -523,7 +526,9 @@ function PatientListContent({
     );
   };
 
-  const mainPatients = filteredPatients.filter(p => !p.dependentOf);
+  // Sem busca, dependentes ficam agrupados no titular (botão "dep."); com busca, aparecem na lista.
+  const hasSearchTerm = searchTerm.trim() !== '';
+  const mainPatients = hasSearchTerm ? filteredPatients : filteredPatients.filter(p => !p.dependentOf);
   const cbmpbTitulars = mainPatients.filter(p => p.patientType === 'cbmpb');
   const otherPatients = mainPatients.filter(p => p.patientType !== 'cbmpb');
 

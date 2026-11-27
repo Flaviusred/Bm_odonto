@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, Plus, Search, User
 import { Modal } from './Modal';
 import { Input } from './Input';
 import { cn } from '../lib/utils';
+import { getTitularName, indexPatients, matchesPatientSearch } from '../lib/patientSearch';
 import { parseDate, formatDateLocal } from '../lib/dateUtils';
 import { PROCEDURE_TYPES } from '../constants';
 import { NoShowButton } from './NoShowButton';
@@ -94,15 +95,16 @@ export function AgendaView({
     }
   }, [isModalOpen]);
 
+  const patientsById = useMemo(() => indexPatients(patients), [patients]);
   const sortedPatients = useMemo(
-    () => [...patients].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+    () => [...patients].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'pt-BR')),
     [patients]
   );
+  // Nome (sem acentos) ou CPF; dependentes também aparecem ao buscar pelo titular.
   const filteredPatients = useMemo(() => {
-    const term = patientSearch.trim().toLowerCase();
-    if (!term) return sortedPatients;
-    return sortedPatients.filter(p => p.name.toLowerCase().includes(term) || p.id === formData.patientId);
-  }, [sortedPatients, patientSearch, formData.patientId]);
+    if (!patientSearch.trim()) return sortedPatients;
+    return sortedPatients.filter(p => matchesPatientSearch(p, patientSearch, patientsById) || p.id === formData.patientId);
+  }, [sortedPatients, patientSearch, formData.patientId, patientsById]);
 
   const sortedDentists = useMemo(
     () => [...dentists].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
@@ -713,7 +715,9 @@ export function AgendaView({
             >
               <option value="">Selecione um paciente</option>
               {filteredPatients.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
+                <option key={p.id} value={p.id}>
+                  {p.name}{p.dependentOf ? ` (dependente de ${getTitularName(p, patientsById) || 'titular'})` : ''}
+                </option>
               ))}
               {filteredPatients.length === 0 && <option value="" disabled>Nenhum paciente encontrado</option>}
             </select>

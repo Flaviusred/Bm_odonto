@@ -32,6 +32,7 @@ import {
   Save
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { getTitularName, indexPatients, matchesPatientSearch } from '../lib/patientSearch';
 import { Toaster, toast } from 'sonner';
 
 import { DOCUMENT_MAX_MB as PDF_MAX_MB, DOCUMENT_MAX_BYTES as PDF_MAX_BYTES, LEGACY_DOCUMENT_MESSAGE, isLegacyUnavailableDocument, openStoredDocument } from '../lib/documentUtils';
@@ -201,13 +202,12 @@ export function DentistPortal({
   const normalize = (s: string) =>
     (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 
+  const patientsById = indexPatients(patients);
+  // Nome (sem acentos) ou CPF; dependentes também aparecem ao buscar pelo titular.
+  // (Antes, ao buscar por nome, o filtro de CPF vazio casava com todos os pacientes.)
   const appointmentFilteredPatients = (() => {
-    const term = normalize(appointmentPatientSearch);
-    if (!term) return patients.slice(0, 50);
-    return patients.filter(p =>
-      normalize(p.name).includes(term) ||
-      (p.cpf || '').replace(/\D/g, '').includes(term.replace(/\D/g, ''))
-    );
+    if (!normalize(appointmentPatientSearch)) return patients.slice(0, 50);
+    return patients.filter(p => matchesPatientSearch(p, appointmentPatientSearch, patientsById));
   })();
 
   const appointmentSelectedPatient = patients.find(p => p.id === appointmentForm.patientId) || null;
@@ -1005,7 +1005,7 @@ export function DentistPortal({
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {patients.filter(p => normalize(p.name || '').includes(normalize(searchTerm))).map(patient => (
+                {patients.filter(p => matchesPatientSearch(p, searchTerm, patientsById)).map(patient => (
                   <Card key={patient.id} className="border-none shadow-sm hover:ring-2 hover:ring-emerald-500 transition-all cursor-pointer" onClick={() => setSelectedPatient(patient)}>
                     <CardContent className="p-6">
                       <div className="flex items-center gap-4">
@@ -1219,7 +1219,9 @@ export function DentistPortal({
                         >
                           <UserRound className="h-4 w-4 text-zinc-400 shrink-0" />
                           <div className="flex flex-col min-w-0">
-                            <span className="text-sm font-medium text-zinc-900 truncate">{p.name}</span>
+                            <span className="text-sm font-medium text-zinc-900 truncate">
+                              {p.name}{p.dependentOf ? ` (dependente de ${getTitularName(p, patientsById) || 'titular'})` : ''}
+                            </span>
                             {p.cpf && <span className="text-xs text-zinc-400">{p.cpf}</span>}
                           </div>
                         </button>
