@@ -49,7 +49,7 @@ const isEmailAlreadyInUseError = (error: unknown) => {
 	return (error as any)?.code === 'auth/email-already-in-use';
 };
 
-const createOrRecoverAuthUid = async (email: string, password: string) => {
+const createOrRecoverAuthUid = async (email: string, password: string): Promise<{ uid: string; existed: boolean }> => {
 	const secondaryApp = initializeApp(firebaseConfig, `secondary-auth-${Date.now()}`);
 	const secondaryAuth = getAuth(secondaryApp);
 	attachAuthEmulator(secondaryAuth);
@@ -57,7 +57,7 @@ const createOrRecoverAuthUid = async (email: string, password: string) => {
 	try {
 		const credential = await createUserWithEmailAndPassword(secondaryAuth, email, password);
 		await signOut(secondaryAuth);
-		return credential.user.uid;
+		return { uid: credential.user.uid, existed: false };
 	} catch (error) {
 		if (!isEmailAlreadyInUseError(error)) {
 			throw error;
@@ -65,7 +65,7 @@ const createOrRecoverAuthUid = async (email: string, password: string) => {
 
 		const existing = await signInWithEmailAndPassword(secondaryAuth, email, password);
 		await signOut(secondaryAuth);
-		return existing.user.uid;
+		return { uid: existing.user.uid, existed: true };
 	} finally {
 		await deleteApp(secondaryApp);
 	}
@@ -74,5 +74,9 @@ const createOrRecoverAuthUid = async (email: string, password: string) => {
 // Cria usuário no Firebase Auth sem alterar a sessão autenticada do app principal.
 // Se o e-mail já existir, faz sign-in temporário para recuperar o UID existente.
 export const createAuthUserWithSecondaryApp = async (email: string, password: string) => {
-	return createOrRecoverAuthUid(email, password);
+	return (await createOrRecoverAuthUid(email, password)).uid;
 };
+
+// Igual ao anterior, mas informa se o e-mail JÁ tinha login (existed = true). Usado no cadastro de
+// pacientes para não reaproveitar o login (e o ID) de outro paciente com o mesmo e-mail.
+export const createOrFindAuthUser = (email: string, password: string) => createOrRecoverAuthUid(email, password);

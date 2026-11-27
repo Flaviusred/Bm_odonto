@@ -19,7 +19,8 @@
     "cleanup:empty-users:dry": "tsx scripts/cleanup-empty-user-docs.ts",
     "cleanup:empty-users:apply": "tsx scripts/cleanup-empty-user-docs.ts --apply",
     "senhas:simular": "tsx scripts/remove-plaintext-passwords.ts",
-    "senhas:aplicar": "tsx scripts/remove-plaintext-passwords.ts --apply"
+    "senhas:aplicar": "tsx scripts/remove-plaintext-passwords.ts --apply",
+    "pacientes:sobrescritos": "tsx scripts/relatorio-pacientes-sobrescritos.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

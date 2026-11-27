@@ -23,7 +23,7 @@ interface PatientListProps {
   treatments: Treatment[];
   dentists: Dentist[];
   documents: PatientDocument[];
-  onAddPatient: (patient: Omit<Patient, 'id' | 'createdAt' | 'isActive'> & { id?: string }) => void;
+  onAddPatient: (patient: Omit<Patient, 'id' | 'createdAt' | 'isActive'> & { id?: string }) => Promise<void> | void;
   onDeletePatient: (id: string) => void;
   onUpdatePatient: (patient: Patient) => void;
   onResetPatientPassword: (patient: Patient, newPassword: string) => Promise<void>;
@@ -277,12 +277,14 @@ function PatientListContent({
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!validate()) return;
+    if (isSaving || !validate()) return;
 
     const cleanCpf = formData.cpf.replace(/\D/g, '');
-    const isDuplicate = patients.some(p => p.cpf.replace(/\D/g, '') === cleanCpf && p.id !== editingPatient?.id);
+    const isDuplicate = patients.some(p => String(p.cpf || '').replace(/\D/g, '') === cleanCpf && p.id !== editingPatient?.id);
     
     if (isDuplicate) {
       setErrorModal('Este CPF já possui cadastro.');
@@ -310,7 +312,16 @@ function PatientListContent({
           if (!finalData.phone && titular.phone) finalData.phone = titular.phone;
         }
       }
-      onAddPatient(finalData);
+      // Espera a gravação: antes a mensagem de sucesso aparecia mesmo quando o cadastro falhava.
+      setIsSaving(true);
+      try {
+        await onAddPatient(finalData);
+      } catch (err) {
+        setErrorModal(err instanceof Error ? err.message : 'Não foi possível cadastrar o paciente. Tente novamente.');
+        return; // mantém o formulário aberto com os dados digitados
+      } finally {
+        setIsSaving(false);
+      }
       setSuccessMessage('Paciente cadastrado com sucesso!');
       setIsSuccessModalOpen(true);
     }
@@ -365,6 +376,37 @@ function PatientListContent({
       parentesco: patient.parentesco || '',
       password: '',
     });
+    setIsModalOpen(true);
+  };
+
+  // Abre o cadastro de um dependente vinculado ao titular (qualquer tipo, inclusive Civil).
+  // Dependentes não têm login próprio: usam o acesso do titular, que vê os dados deles no portal.
+  const handleAddDependent = (titular: Patient) => {
+    setEditingPatient(null);
+    setSelectedPatientId(null);
+    setFormData({
+      name: '',
+      email: '',
+      phone: '',
+      cpf: '',
+      birthDate: '',
+      address: titular.address || '',
+      anamnesis: '',
+      cep: titular.cep || '',
+      street: titular.street || '',
+      number: titular.number || '',
+      neighborhood: titular.neighborhood || '',
+      city: titular.city || '',
+      state: titular.state || '',
+      patientType: titular.patientType || 'civil',
+      securityType: titular.securityType || '',
+      registrationNumber: '',
+      functionalCategory: '',
+      dependentOf: titular.id,
+      parentesco: '',
+      password: '',
+    });
+    setErrors({});
     setIsModalOpen(true);
   };
 
@@ -516,10 +558,15 @@ function PatientListContent({
           });
           setErrors({});
         }} 
-        title={editingPatient ? "Editar Paciente" : "Novo Paciente"}
+        title={editingPatient ? "Editar Paciente" : (formData.dependentOf ? "Novo Dependente" : "Novo Paciente")}
         closeOnBackdropClick={false}
       >
         <form onSubmit={handleSubmit} className="space-y-4">
+          {!editingPatient && formData.dependentOf && (
+            <div className="rounded-xl bg-emerald-50 border border-emerald-100 px-3 py-2 text-sm text-emerald-800">
+              Dependente de: <strong>{patients.find(p => p.id === formData.dependentOf)?.name || 'titular'}</strong>
+            </div>
+          )}
           <div className="flex gap-2 p-4 bg-emerald-50 rounded-xl border border-emerald-100">
             <Input 
               label="Buscar Militar do CBMPB (Matrícula/CPF)"
@@ -549,14 +596,14 @@ function PatientListContent({
             <Input 
               label="Email" 
               type="email" 
-              required 
+              required={!formData.dependentOf} 
               value={formData.email}
               error={errors.email}
               onChange={(e) => setFormData({ ...formData, email: e.target.value })}
             />
             <Input 
               label="Telefone" 
-              required 
+              required={!formData.dependentOf} 
               value={formData.phone}
               error={errors.phone}
               onChange={(e) => setFormData({ ...formData, phone: maskPhone(e.target.value) })}
@@ -623,7 +670,7 @@ function PatientListContent({
                 onChange={(e) => setFormData({ ...formData, functionalCategory: e.target.value })}
               />
             )}
-            {formData.patientType === 'cbmpb' && (
+            {(formData.patientType === 'cbmpb' || !!formData.dependentOf) && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-zinc-700">Grau de Parentesco</label>
                 <select 
@@ -682,7 +729,13 @@ function PatientListContent({
               onChange={(e) => setFormData({ ...formData, state: e.target.value })}
             />
           </div>
-          {!editingPatient && (
+          {!editingPatient && !!formData.dependentOf && (
+            <p className="text-xs text-zinc-500 bg-zinc-50 border border-zinc-100 rounded-xl p-3">
+              Dependentes não têm login próprio: o titular acompanha os agendamentos e o prontuário
+              deles pelo portal. E-mail e telefone em branco são herdados do titular.
+            </p>
+          )}
+          {!editingPatient && !formData.dependentOf && (
             <Input 
               label="Senha" 
               type="password" 
@@ -696,7 +749,7 @@ function PatientListContent({
               Cancelar
             </Button>
             <Button type="submit">
-              {editingPatient ? 'Salvar Alterações' : 'Cadastrar Paciente'}
+              {editingPatient ? 'Salvar Alterações' : (isSaving ? 'Salvando...' : 'Cadastrar Paciente')}
             </Button>
           </div>
         </form>
@@ -903,10 +956,18 @@ function PatientListContent({
                 <UserRound className={cn("h-4 w-4", selectedPatientDetails.isActive ? "text-amber-600" : "text-emerald-600")} /> 
                 <span className="whitespace-nowrap">{selectedPatientDetails.isActive ? "Desabilitar" : "Habilitar"}</span>
               </Button>
-              <Button variant="outline" size="sm" className="gap-2 text-emerald-600 border-emerald-100 flex-1 sm:flex-none justify-center" onClick={() => handleGeneratePassword(selectedPatientDetails)}>
-                <Award className="h-4 w-4" /> 
-                <span className="whitespace-nowrap">Nova Senha</span>
-              </Button>
+              {!selectedPatientDetails.dependentOf && (
+                <Button variant="outline" size="sm" className="gap-2 text-emerald-600 border-emerald-100 flex-1 sm:flex-none justify-center" onClick={() => handleGeneratePassword(selectedPatientDetails)}>
+                  <Award className="h-4 w-4" /> 
+                  <span className="whitespace-nowrap">Nova Senha</span>
+                </Button>
+              )}
+              {!selectedPatientDetails.dependentOf && (
+                <Button variant="outline" size="sm" className="gap-2 text-zinc-600 border-zinc-200 flex-1 sm:flex-none justify-center" onClick={() => handleAddDependent(selectedPatientDetails)}>
+                  <Users className="h-4 w-4" />
+                  <span className="whitespace-nowrap">Adicionar Dependente</span>
+                </Button>
+              )}
               <Button variant="outline" size="sm" className="gap-2 text-emerald-600 border-emerald-100 flex-1 sm:flex-none justify-center" onClick={() => setIsUploadModalOpen(true)}>
                 <FileUp className="h-4 w-4" /> 
                 <span className="whitespace-nowrap">Upload Documento</span>

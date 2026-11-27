@@ -35,7 +35,7 @@ import LoadingOverlay from './components/LoadingOverlay';
 import { subscribe as subscribeLoading, runWithLoading } from './lib/loadingStore';
 import { collection, doc, setDoc, onSnapshot, deleteDoc, updateDoc, getDoc, query, where, deleteField, orderBy, getDocs, writeBatch, runTransaction } from 'firebase/firestore';
 import { sendPasswordResetEmail, signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
-import { db, auth, createAuthUserWithSecondaryApp } from './firebase';
+import { db, auth, createAuthUserWithSecondaryApp, createOrFindAuthUser } from './firebase';
 import { normalizeTreatmentProcedures } from './constants';
 import { getProcedureReport, getProcedureTypeTotals } from './lib/procedureReport';
 import { canMarkNoShow } from './lib/appointmentStatus';
@@ -1254,6 +1254,8 @@ export default function App() {
   }, [user]);
 
   // Patient Handlers
+  // Cadastra um paciente. Lança erro (com mensagem para o usuário) quando não salva, para a tela
+  // não mostrar "sucesso" em um cadastro que não foi gravado.
   const addPatient = async (data: Omit<Patient, 'id' | 'createdAt' | 'isActive'> & { id?: string }) => {
     // If an ID is provided, check if the patient already exists
     if (data.id && patients.some(p => p.id === data.id)) {
@@ -1261,8 +1263,9 @@ export default function App() {
     }
     
     // Check for CPF duplicate if provided (only for titulars)
-    if (data.cpf && !data.dependentOf && patients.some(p => p.cpf === data.cpf && !p.dependentOf)) {
-      return;
+    const newCpf = normalizeCpfValue(data.cpf);
+    if (newCpf && !data.dependentOf && patients.some(p => normalizeCpfValue(p.cpf) === newCpf && !p.dependentOf)) {
+      throw new Error('Este CPF já possui cadastro.');
     }
     
     const baseId = data.id || safeRandomUUID().replace(/-/g,"").substring(0,9);
@@ -1278,10 +1281,31 @@ export default function App() {
         let authUid: string | undefined;
 
         if (hasEmail && patientPassword && patientPassword.length >= 6) {
-          authUid = await createAuthUserWithSecondaryApp(normalizedPatientEmail, patientPassword);
+          const emailInUseMessage = `O e-mail ${normalizedPatientEmail} já é o login de outro paciente. `
+            + 'Para familiares que usam o mesmo e-mail, abra a ficha do responsável e use "Adicionar Dependente", ou informe outro e-mail.';
+          let result: { uid: string; existed: boolean };
+          try {
+            result = await createOrFindAuthUser(normalizedPatientEmail, patientPassword);
+          } catch (authErr: any) {
+            // E-mail já tem login com outra senha.
+            if (['auth/wrong-password', 'auth/invalid-credential', 'auth/invalid-login-credentials'].includes(authErr?.code)) {
+              throw new Error(emailInUseMessage);
+            }
+            throw authErr;
+          }
+          // O e-mail já tinha login: só reaproveita se esse login não pertencer a outro paciente.
+          // Antes, o novo cadastro era gravado com o mesmo ID e SUBSTITUÍA o paciente existente.
+          if (result.existed && patients.some((p: any) => p.id === result.uid || p.authUid === result.uid)) {
+            throw new Error(emailInUseMessage);
+          }
+          authUid = result.uid;
         }
 
         const effectiveId = (!data.id && authUid && !data.dependentOf) ? authUid : baseId;
+        // Proteção extra: nunca grava por cima de um cadastro existente.
+        if ((await getDoc(doc(db, 'patients', effectiveId))).exists()) {
+          throw new Error('Já existe um paciente com este identificador. Recarregue a página e confira a lista antes de cadastrar novamente.');
+        }
         const newPatient: Patient = {
           ...data,
           id: effectiveId,
@@ -1306,15 +1330,29 @@ export default function App() {
             role: 'patient',
             permissions: ['patient-profile'],
             phone: newPatient.phone,
+            // As regras exigem o CPF (11 dígitos) quando a atendente cria o perfil; sem ele o
+            // perfil não era criado e o paciente não conseguia entrar no portal.
+            ...(newCpf.length === 11 ? { cpf: newCpf } : {}),
             ...(authUid ? { authUid } : {})
           };
-          await setDoc(doc(db, 'users', effectiveId), newUser);
+          try {
+            await setDoc(doc(db, 'users', effectiveId), newUser);
+          } catch (userErr) {
+            // O paciente já foi salvo; só o perfil de login falhou. Não desfaz o cadastro.
+            console.error('Falha ao criar o perfil de login do paciente:', userErr);
+            toast.error('Paciente salvo, mas o login dele não foi configurado. Use "Nova Senha" para gerar um acesso.');
+          }
         }
       });
 
       logAction('Criação', 'patient', createdPatientId, `Paciente ${createdPatientName} criado.`);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'patients');
+      if (error instanceof Error && !(error as any).code) {
+        toast.error(error.message);
+      } else {
+        handleFirestoreError(error, OperationType.WRITE, 'patients');
+      }
+      throw error;
     }
   };
 
